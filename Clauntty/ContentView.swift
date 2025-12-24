@@ -1,4 +1,5 @@
 import SwiftUI
+import os.log
 
 struct ContentView: View {
     @EnvironmentObject var connectionStore: ConnectionStore
@@ -6,6 +7,7 @@ struct ContentView: View {
     @EnvironmentObject var sessionManager: SessionManager
 
     @State private var showingNewTabSheet = false
+    @State private var hasCheckedAutoConnect = false
 
     var body: some View {
         NavigationStack {
@@ -16,13 +18,18 @@ struct ContentView: View {
                         showingNewTabSheet = true
                     })
 
-                    if let activeSession = sessionManager.activeSession {
-                        TerminalView(session: activeSession)
-                    } else {
-                        // Fallback if no active session (shouldn't happen)
-                        Color.black.ignoresSafeArea()
+                    // Keep ALL terminal views alive, but only show the active one.
+                    // This preserves terminal state (font size, scrollback, etc.) across tab switches.
+                    ZStack {
+                        ForEach(sessionManager.sessions) { session in
+                            TerminalView(session: session)
+                                .opacity(session.id == sessionManager.activeSessionId ? 1 : 0)
+                                // Disable user interaction for hidden tabs
+                                .allowsHitTesting(session.id == sessionManager.activeSessionId)
+                        }
                     }
                 }
+                .toolbar(.hidden, for: .navigationBar)
                 .sheet(isPresented: $showingNewTabSheet) {
                     NavigationStack {
                         ConnectionListView()
@@ -45,6 +52,48 @@ struct ContentView: View {
             } else {
                 // Show connection list when no sessions
                 ConnectionListView()
+            }
+        }
+        .onAppear {
+            checkAutoConnect()
+        }
+    }
+
+    /// Check for --connect <name> launch argument and auto-connect
+    private func checkAutoConnect() {
+        guard !hasCheckedAutoConnect else { return }
+        hasCheckedAutoConnect = true
+
+        guard let connectionName = LaunchArgs.autoConnectName() else { return }
+
+        Logger.clauntty.info("Auto-connect requested for: \(connectionName)")
+
+        // Find connection by name (case-insensitive)
+        guard let connection = connectionStore.connections.first(where: {
+            $0.name.lowercased() == connectionName.lowercased() ||
+            $0.host.lowercased() == connectionName.lowercased()
+        }) else {
+            let available = connectionStore.connections.map { "\($0.name) (\($0.host))" }.joined(separator: ", ")
+            Logger.clauntty.error("Auto-connect: connection '\(connectionName)' not found. Available: \(available)")
+            return
+        }
+
+        Logger.clauntty.info("Auto-connect: found connection \(connection.name) (\(connection.host))")
+
+        // Create session and connect
+        Task {
+            do {
+                // First, establish SSH and deploy rtach
+                Logger.clauntty.info("Auto-connect: establishing SSH and deploying rtach...")
+                let _ = try await sessionManager.connectAndListSessions(for: connection)
+                Logger.clauntty.info("Auto-connect: rtach deployed, creating session...")
+
+                // Now create and connect the terminal session
+                let session = sessionManager.createSession(for: connection)
+                try await sessionManager.connect(session: session)
+                Logger.clauntty.info("Auto-connect: session connected successfully")
+            } catch {
+                Logger.clauntty.error("Auto-connect failed: \(error.localizedDescription)")
             }
         }
     }

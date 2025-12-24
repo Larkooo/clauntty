@@ -37,8 +37,14 @@ class Session: ObservableObject, Identifiable {
 
     @Published var state: State = .disconnected
 
-    /// Display title for tab
+    /// Dynamic title set by terminal escape sequences (OSC 0/1/2)
+    @Published var dynamicTitle: String?
+
+    /// Display title for tab - prefer dynamic title if set
     var title: String {
+        if let dynamic = dynamicTitle, !dynamic.isEmpty {
+            return dynamic
+        }
         if !connectionConfig.name.isEmpty {
             return connectionConfig.name
         }
@@ -55,6 +61,21 @@ class Session: ObservableObject, Identifiable {
 
     /// Reference to parent connection (for sending data)
     weak var parentConnection: SSHConnection?
+
+    /// Strong reference to SSH connection - each session owns its connection
+    /// This keeps the connection alive for the lifetime of the session
+    var sshConnection: SSHConnection?
+
+    // MARK: - Terminal Size
+
+    /// Initial terminal size to use when connecting (rows, columns)
+    /// Set this before connecting for correct initial PTY size
+    var initialTerminalSize: (rows: Int, columns: Int) = (30, 60)
+
+    // MARK: - rtach Session
+
+    /// The rtach session ID to use when connecting (nil = create new session)
+    var rtachSessionId: String?
 
     // MARK: - Scrollback Buffer
 
@@ -89,11 +110,14 @@ class Session: ObservableObject, Identifiable {
         self.parentConnection = connection
         self.state = .connected
         onStateChanged?(.connected)
-        Logger.clauntty.info("Session \(self.id.uuidString.prefix(8)): channel attached")
+        Logger.clauntty.info("Session \(self.id.uuidString.prefix(8)): channel attached, channelHandler is set")
     }
 
     /// Detach the channel (on disconnect)
     func detach() {
+        // Disconnect our SSH connection
+        sshConnection?.disconnect()
+        sshConnection = nil
         sshChannel = nil
         channelHandler = nil
         parentConnection = nil
@@ -121,6 +145,11 @@ class Session: ObservableObject, Identifiable {
 
     /// Send data to remote (keyboard input)
     func sendData(_ data: Data) {
+        let hasHandler = self.channelHandler != nil
+        Logger.clauntty.info("Session \(self.id.uuidString.prefix(8)): sendData called with \(data.count) bytes, channelHandler=\(hasHandler ? "set" : "nil")")
+        if channelHandler == nil {
+            Logger.clauntty.error("Session \(self.id.uuidString.prefix(8)): sendData called but channelHandler is nil!")
+        }
         channelHandler?.sendToRemote(data)
     }
 

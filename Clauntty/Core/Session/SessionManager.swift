@@ -40,11 +40,15 @@ class SessionManager: ObservableObject {
         return session
     }
 
-    /// Connect a session (authenticate and open channel)
-    func connect(session: Session) async throws {
-        session.state = .connecting
+    /// Whether to use rtach for session persistence (can be disabled for debugging)
+    var useRtach: Bool = true
 
-        let config = session.connectionConfig
+    /// Cache of RtachDeployer per connection (for session listing)
+    private var rtachDeployers: [String: RtachDeployer] = [:]
+
+    /// Connect SSH and list existing rtach sessions
+    /// Returns sessions and deployer, or nil if rtach is disabled or deployment fails
+    func connectAndListSessions(for config: SavedConnection) async throws -> (sessions: [RtachSession], deployer: RtachDeployer)? {
         let poolKey = connectionKey(for: config)
 
         // Get or create SSH connection
@@ -62,20 +66,76 @@ class SessionManager: ObservableObject {
                 connectionId: config.id
             )
 
-            // Connect (authenticates)
             try await connection.connect()
             connectionPool[poolKey] = connection
         }
 
-        // Create a new channel for this session
-        let (channel, handler) = try await connection.createChannel { [weak session] data in
+        guard useRtach else { return nil }
+
+        // Deploy rtach and list sessions
+        do {
+            let deployer = RtachDeployer(connection: connection)
+            try await deployer.ensureDeployed()
+            rtachDeployers[poolKey] = deployer
+            let sessions = try await deployer.listSessions()
+            return (sessions: sessions, deployer: deployer)
+        } catch {
+            Logger.clauntty.warning("SessionManager: rtach deployment failed: \(error.localizedDescription)")
+            return nil
+        }
+    }
+
+    /// Connect a session with optional rtach session ID
+    /// - Parameter rtachSessionId: The rtach session to attach to, or nil for new session
+    func connect(session: Session, rtachSessionId: String? = nil) async throws {
+        Logger.clauntty.info("SessionManager.connect called for session \(session.id.uuidString.prefix(8))")
+        session.state = .connecting
+
+        let config = session.connectionConfig
+        let poolKey = connectionKey(for: config)
+
+        // Create a fresh SSH connection for the terminal session
+        // (The connection from connectAndListSessions may be in a bad state after exec commands)
+        Logger.clauntty.info("SessionManager: creating fresh connection for terminal session \(session.id.uuidString.prefix(8))")
+        let connection = SSHConnection(
+            host: config.host,
+            port: config.port,
+            username: config.username,
+            authMethod: config.authMethod,
+            connectionId: config.id
+        )
+        try await connection.connect()
+        Logger.clauntty.info("SessionManager: SSH connection established for \(session.id.uuidString.prefix(8))")
+
+        // Store this session's connection - don't disconnect other sessions' connections!
+        // Each session gets its own SSH connection to avoid killing other sessions' channels
+        session.sshConnection = connection
+
+        // Build rtach command
+        var shellCommand: String? = nil
+        if useRtach, let deployer = rtachDeployers[poolKey] {
+            // Use session's rtach ID, or generate new UUID for new session
+            let sessionId = session.rtachSessionId ?? UUID().uuidString
+            // Store back so we can track which rtach session this tab is using
+            session.rtachSessionId = sessionId
+            shellCommand = deployer.shellCommand(sessionId: sessionId)
+            Logger.clauntty.info("SessionManager: using rtach session: \(sessionId.prefix(8))...")
+        }
+
+        // Create a new channel for this session with the correct terminal size
+        Logger.clauntty.info("SessionManager: creating channel for \(session.id.uuidString.prefix(8)), command=\(shellCommand ?? "shell")")
+        let (channel, handler) = try await connection.createChannel(
+            terminalSize: session.initialTerminalSize,
+            command: shellCommand
+        ) { [weak session] data in
             Task { @MainActor in
                 session?.handleDataReceived(data)
             }
         }
+        Logger.clauntty.info("SessionManager: channel created for \(session.id.uuidString.prefix(8))")
 
         session.attach(channel: channel, handler: handler, connection: connection)
-        Logger.clauntty.info("SessionManager: session \(session.id.uuidString.prefix(8)) connected")
+        Logger.clauntty.info("SessionManager: session \(session.id.uuidString.prefix(8)) connected and attached")
     }
 
     /// Close a session
@@ -161,5 +221,24 @@ class SessionManager: ObservableObject {
     /// Get session by ID
     func session(id: UUID) -> Session? {
         sessions.first { $0.id == id }
+    }
+
+    /// Check if an rtach session is already open in a tab
+    /// Returns the Session if open, nil otherwise
+    func sessionForRtach(_ rtachSessionId: String) -> Session? {
+        sessions.first { $0.rtachSessionId == rtachSessionId }
+    }
+}
+
+// MARK: - Errors
+
+enum SessionError: Error, LocalizedError {
+    case notConnected
+
+    var errorDescription: String? {
+        switch self {
+        case .notConnected:
+            return "SSH connection not established"
+        }
     }
 }

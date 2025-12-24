@@ -2,6 +2,7 @@ import Foundation
 import NIOCore
 import NIOSSH
 import Crypto
+import os.log
 
 /// Handles SSH authentication (password and SSH key)
 class SSHAuthenticator: NIOSSHClientUserAuthenticationDelegate {
@@ -22,6 +23,8 @@ class SSHAuthenticator: NIOSSHClientUserAuthenticationDelegate {
         availableMethods: NIOSSHAvailableUserAuthenticationMethods,
         nextChallengePromise: EventLoopPromise<NIOSSHUserAuthenticationOffer?>
     ) {
+        Logger.clauntty.info("SSH auth: nextAuthenticationType called, availableMethods=\(String(describing: availableMethods))")
+
         switch authMethod {
         case .password:
             guard availableMethods.contains(.password), !triedPassword else {
@@ -52,7 +55,9 @@ class SSHAuthenticator: NIOSSHClientUserAuthenticationDelegate {
             }
 
         case .sshKey(let keyId):
+            Logger.clauntty.info("SSH auth: trying publicKey, available=\(availableMethods.contains(.publicKey)), triedKey=\(self.triedKey)")
             guard availableMethods.contains(.publicKey), !triedKey else {
+                Logger.clauntty.info("SSH auth: no more methods to try")
                 nextChallengePromise.succeed(nil)
                 return
             }
@@ -61,7 +66,9 @@ class SSHAuthenticator: NIOSSHClientUserAuthenticationDelegate {
 
             Task { @MainActor in
                 do {
+                    Logger.clauntty.info("SSH auth: loading private key \(keyId.prefix(8))...")
                     let privateKey = try self.loadPrivateKey(keyId: keyId)
+                    Logger.clauntty.info("SSH auth: key loaded, sending offer for user '\(self.username)'")
 
                     let offer = NIOSSHUserAuthenticationOffer(
                         username: self.username,
@@ -69,8 +76,9 @@ class SSHAuthenticator: NIOSSHClientUserAuthenticationDelegate {
                         offer: .privateKey(.init(privateKey: privateKey))
                     )
                     nextChallengePromise.succeed(offer)
+                    Logger.clauntty.info("SSH auth: offer sent")
                 } catch {
-                    print("Failed to load SSH key: \(error)")
+                    Logger.clauntty.error("SSH auth: failed to load SSH key: \(error.localizedDescription)")
                     nextChallengePromise.succeed(nil)
                 }
             }

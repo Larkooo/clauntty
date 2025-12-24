@@ -125,6 +125,73 @@ The `ghostty_surface_write_pty_output` function feeds data directly to the termi
 - [ ] RSA/ECDSA key support
 - [ ] Host key verification
 - [ ] Multiple sessions/tabs
+- [ ] rtach integration (session persistence)
+
+## rtach Integration
+
+**rtach** (`../rtach/`) provides session persistence with scrollback. On SSH disconnect, the session survives and can be reattached.
+
+### How It Works
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Remote Server                                              │
+│  ┌─────────────┐    ┌─────────────┐    ┌────────────────┐  │
+│  │ SSH Channel │◄──►│   rtach     │◄──►│  $SHELL (bash) │  │
+│  │             │    │ (scrollback)│    │                │  │
+│  └─────────────┘    └─────────────┘    └────────────────┘  │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Integration Steps
+
+1. **Bundle binaries** in app:
+   - `rtach-x86_64-linux-musl` (117KB)
+   - `rtach-aarch64-linux-musl` (114KB)
+
+2. **On SSH connect**, check remote:
+   ```bash
+   test -x ~/.clauntty/bin/rtach && echo "exists"
+   ```
+
+3. **Upload if missing** via SFTP:
+   ```swift
+   // Detect arch
+   let arch = sshExec("uname -m")  // x86_64 or aarch64
+   // Upload matching binary
+   sftp.upload(rtachBinary, to: "~/.clauntty/bin/rtach")
+   sshExec("chmod +x ~/.clauntty/bin/rtach")
+   ```
+
+4. **Wrap shell command**:
+   ```bash
+   # Instead of: $SHELL
+   ~/.clauntty/bin/rtach -A ~/.clauntty/sessions/{session-id} $SHELL
+   ```
+
+5. **On reconnect**, same command auto-reattaches with scrollback replay.
+
+### Build rtach
+
+```bash
+cd ../rtach
+zig build cross         # Build Linux binaries
+ls zig-out/bin/rtach-*  # x86_64 + aarch64, ~100KB each
+
+# Copy to iOS app resources (required after rtach changes)
+cp zig-out/bin/rtach-* ../clauntty/Clauntty/Resources/rtach/
+
+# Clean iOS build to pick up new binaries (Xcode caches resources)
+xcodebuild -project ../clauntty/Clauntty.xcodeproj -scheme Clauntty clean
+```
+
+### Test rtach
+
+```bash
+cd ../rtach/tests
+bun test                # 24 tests, all should pass
+bun run load-test.ts    # Performance: ~16K msg/sec
+```
 
 ## iOS Fixes Applied
 

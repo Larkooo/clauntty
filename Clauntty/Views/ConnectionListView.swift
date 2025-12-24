@@ -4,11 +4,21 @@ struct ConnectionListView: View {
     @EnvironmentObject var connectionStore: ConnectionStore
     @EnvironmentObject var appState: AppState
     @EnvironmentObject var sessionManager: SessionManager
+    @Environment(\.dismiss) private var dismiss
     @State private var showingNewConnection = false
     @State private var connectionToEdit: SavedConnection?
     @State private var showingPasswordPrompt = false
     @State private var pendingConnection: SavedConnection?
     @State private var enteredPassword = ""
+
+    // Session picker state
+    @State private var isConnecting = false
+    @State private var showingSessionPicker = false
+    @State private var rtachSessions: [RtachSession] = []
+    @State private var connectionForPicker: SavedConnection?
+    @State private var deployerForPicker: RtachDeployer?
+    @State private var connectionError: String?
+    @State private var showingError = false
 
     var body: some View {
         List {
@@ -71,6 +81,40 @@ struct ConnectionListView: View {
                 Text("Enter password for \(connection.username)@\(connection.host)")
             }
         }
+        .sheet(isPresented: $showingSessionPicker) {
+            if let connection = connectionForPicker {
+                SessionPickerView(
+                    connection: connection,
+                    sessions: $rtachSessions,
+                    deployer: deployerForPicker,
+                    onSelect: { selectedSessionId in
+                        finalizeConnection(to: connection, rtachSessionId: selectedSessionId)
+                    },
+                    onSwitchToTab: { existingSession in
+                        sessionManager.switchTo(existingSession)
+                        // Dismiss this view too (not just the picker) to return to terminal
+                        dismiss()
+                    }
+                )
+            }
+        }
+        .alert("Connection Error", isPresented: $showingError) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(connectionError ?? "Unknown error")
+        }
+        .overlay {
+            if isConnecting {
+                ZStack {
+                    Color.black.opacity(0.3)
+                        .ignoresSafeArea()
+                    ProgressView("Connecting...")
+                        .padding()
+                        .background(.regularMaterial)
+                        .cornerRadius(10)
+                }
+            }
+        }
     }
 
     private var emptyStateView: some View {
@@ -130,11 +174,45 @@ struct ConnectionListView: View {
 
         connectionStore.updateLastConnected(connection)
 
-        // Create a new session - the session manager handles connection pooling
-        // and will reuse existing SSH connections when appropriate
-        _ = sessionManager.createSession(for: connection)
+        // Start async connection flow
+        isConnecting = true
+
+        Task {
+            do {
+                // Connect SSH and list existing rtach sessions
+                let result = try await sessionManager.connectAndListSessions(for: connection)
+
+                await MainActor.run {
+                    isConnecting = false
+
+                    if let result = result, !result.sessions.isEmpty {
+                        // Show session picker
+                        rtachSessions = result.sessions
+                        deployerForPicker = result.deployer
+                        connectionForPicker = connection
+                        showingSessionPicker = true
+                    } else {
+                        // No existing sessions, create new one directly
+                        finalizeConnection(to: connection, rtachSessionId: nil)
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    isConnecting = false
+                    connectionError = error.localizedDescription
+                    showingError = true
+                }
+            }
+        }
+    }
+
+    private func finalizeConnection(to connection: SavedConnection, rtachSessionId: String?) {
+        // Create a new session object with rtach session ID
+        let session = sessionManager.createSession(for: connection)
+        session.rtachSessionId = rtachSessionId
 
         // Navigation happens automatically when sessionManager.hasSessions becomes true
+        // TerminalView will call sessionManager.connect() via connectSession()
     }
 }
 

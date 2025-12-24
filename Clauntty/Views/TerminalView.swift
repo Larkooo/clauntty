@@ -1,6 +1,10 @@
 import SwiftUI
 import os.log
 
+/// Terminal background color matching Ghostty's default theme (#282C34)
+/// From ghostty/src/config/Config.zig: background: Color = .{ .r = 0x28, .g = 0x2C, .b = 0x34 }
+private let terminalBackgroundColor = Color(red: 40/255.0, green: 44/255.0, blue: 52/255.0) // #282C34
+
 struct TerminalView: View {
     @EnvironmentObject var ghosttyApp: GhosttyApp
     @EnvironmentObject var sessionManager: SessionManager
@@ -11,12 +15,17 @@ struct TerminalView: View {
     /// Reference to the terminal surface view for SSH data flow
     @State private var terminalSurface: TerminalSurfaceView?
 
+    /// Whether this terminal is currently the active tab
+    private var isActive: Bool {
+        session.id == sessionManager.activeSessionId
+    }
+
     var body: some View {
         ZStack {
             // Show terminal surface based on GhosttyApp readiness
             switch ghosttyApp.readiness {
             case .loading:
-                Color.black
+                terminalBackgroundColor
                     .ignoresSafeArea()
                 VStack {
                     ProgressView()
@@ -27,7 +36,7 @@ struct TerminalView: View {
                 }
 
             case .error:
-                Color.black
+                terminalBackgroundColor
                     .ignoresSafeArea()
                 VStack {
                     Image(systemName: "exclamationmark.triangle.fill")
@@ -39,14 +48,15 @@ struct TerminalView: View {
                 }
 
             case .ready:
-                // Black background extends under notch
-                Color.black
+                // Terminal background extends under notch in landscape
+                terminalBackgroundColor
                     .ignoresSafeArea()
 
-                // Terminal respects safe area
+                // Terminal surface - use full available space
                 // Use .id(session.id) to ensure a new surface is created for each session
                 TerminalSurface(
                     ghosttyApp: ghosttyApp,
+                    isActive: isActive,
                     onTextInput: { data in
                         // Send keyboard input to SSH via session
                         session.sendData(data)
@@ -60,6 +70,7 @@ struct TerminalView: View {
                         connectSession(surface: surface)
                     }
                 )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .id(session.id)  // Force new surface per session
 
                 // Show connecting overlay
@@ -100,10 +111,6 @@ struct TerminalView: View {
                 }
             }
         }
-        .navigationBarBackButtonHidden(true)
-        .toolbarBackground(.visible, for: .navigationBar)
-        .toolbarBackground(Color.black.opacity(0.8), for: .navigationBar)
-        .toolbarColorScheme(.dark, for: .navigationBar)
     }
 
     private func connectSession(surface: TerminalSurfaceView) {
@@ -122,8 +129,16 @@ struct TerminalView: View {
         // Start connection via SessionManager
         Task {
             do {
-                try await sessionManager.connect(session: session)
+                try await sessionManager.connect(session: session, rtachSessionId: session.rtachSessionId)
                 Logger.clauntty.info("Session connected: \(session.id.uuidString.prefix(8))")
+
+                // Force send actual terminal size immediately after connection
+                // This ensures the remote PTY has correct dimensions before user types anything
+                await MainActor.run {
+                    let size = surface.terminalSize
+                    Logger.clauntty.info("Sending initial window size: \(size.columns)x\(size.rows)")
+                    session.sendWindowChange(rows: size.rows, columns: size.columns)
+                }
 
                 // Replay any scrollback buffer that was accumulated
                 if !session.scrollbackBuffer.isEmpty {
@@ -144,6 +159,11 @@ struct TerminalView: View {
             DispatchQueue.main.async {
                 surface.writeSSHOutput(data)
             }
+        }
+
+        // Set up callback for terminal title changes → session title
+        surface.onTitleChanged = { [weak session] title in
+            session?.dynamicTitle = title
         }
     }
 }

@@ -3,10 +3,42 @@ import UIKit
 import GhosttyKit
 import os.log
 
+// MARK: - Font Size Preference
+
+/// Manages the persisted font size preference for terminals
+enum FontSizePreference {
+    private static let key = "terminalFontSize"
+    private static let defaultSize: Float = 11.0
+    private static let minSize: Float = 6.0
+    private static let maxSize: Float = 36.0
+
+    /// Get the saved font size, or default if not set
+    static var current: Float {
+        let saved = UserDefaults.standard.float(forKey: key)
+        // Return default if not set (0 means not set)
+        return saved > 0 ? saved : defaultSize
+    }
+
+    /// Save a new font size preference
+    static func save(_ size: Float) {
+        let clamped = max(minSize, min(maxSize, size))
+        UserDefaults.standard.set(clamped, forKey: key)
+        Logger.clauntty.info("Font size preference saved: \(clamped)")
+    }
+
+    /// Reset to default
+    static func reset() {
+        UserDefaults.standard.removeObject(forKey: key)
+    }
+}
+
 /// SwiftUI wrapper for the Ghostty terminal surface
 /// Based on: ~/Projects/ghostty/macos/Sources/Ghostty/SurfaceView_UIKit.swift
 struct TerminalSurface: UIViewRepresentable {
     @ObservedObject var ghosttyApp: GhosttyApp
+
+    /// Whether this terminal is currently the active tab
+    var isActive: Bool = true
 
     /// Callback for keyboard input - send this data to SSH
     var onTextInput: ((Data) -> Void)?
@@ -22,9 +54,11 @@ struct TerminalSurface: UIViewRepresentable {
             Logger.clauntty.error("Cannot create TerminalSurfaceView: GhosttyApp not initialized")
             return TerminalSurfaceView(frame: .zero, app: nil)
         }
-        let view = TerminalSurfaceView(frame: CGRect(x: 0, y: 0, width: 800, height: 600), app: app)
+        // Start with zero frame - SwiftUI will size it properly via layoutSubviews
+        let view = TerminalSurfaceView(frame: .zero, app: app)
         view.onTextInput = onTextInput
         view.onTerminalSizeChanged = onTerminalSizeChanged
+        view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         onSurfaceReady?(view)
         return view
     }
@@ -33,6 +67,9 @@ struct TerminalSurface: UIViewRepresentable {
         // Update callbacks if they changed
         uiView.onTextInput = onTextInput
         uiView.onTerminalSizeChanged = onTerminalSizeChanged
+
+        // Handle focus changes when active state changes
+        uiView.setActive(isActive)
     }
 
     func makeCoordinator() -> Coordinator {
@@ -52,6 +89,17 @@ struct TerminalSurface: UIViewRepresentable {
 /// Uses CAMetalLayer for GPU-accelerated rendering
 class TerminalSurfaceView: UIView, ObservableObject, UIKeyInput, UITextInputTraits {
 
+    // MARK: - Surface Registry (for routing Ghostty callbacks)
+
+    /// Registry to look up surfaces by pointer (for routing Ghostty action callbacks)
+    private static var surfaceRegistry: [UnsafeRawPointer: TerminalSurfaceView] = [:]
+
+    /// Look up surface view by Ghostty surface pointer
+    static func find(surface: ghostty_surface_t) -> TerminalSurfaceView? {
+        let ptr = UnsafeRawPointer(surface)
+        return surfaceRegistry[ptr]
+    }
+
     // MARK: - Published Properties
 
     @Published var title: String = "Terminal"
@@ -69,6 +117,14 @@ class TerminalSurfaceView: UIView, ObservableObject, UIKeyInput, UITextInputTrai
 
     /// Callback when terminal grid size changes (for SSH window resize)
     var onTerminalSizeChanged: ((UInt16, UInt16) -> Void)?
+
+    /// Callback when terminal sets title via OSC escape sequence
+    var onTitleChanged: ((String) -> Void)?
+
+    // MARK: - Font Size
+
+    /// Current font size in points (tracked for persistence)
+    private var currentFontSize: Float = FontSizePreference.current
 
     // MARK: - UITextInputTraits
 
@@ -116,7 +172,8 @@ class TerminalSurfaceView: UIView, ObservableObject, UIKeyInput, UITextInputTrai
             uiview: Unmanaged.passUnretained(self).toOpaque()
         ))
         config.scale_factor = UIScreen.main.scale
-        config.font_size = 12.0  // Smaller font for mobile
+        // Use saved font size preference, or default if not set
+        config.font_size = FontSizePreference.current
 
         // Create the surface
         guard let surface = ghostty_surface_new(app, &config) else {
@@ -125,6 +182,11 @@ class TerminalSurfaceView: UIView, ObservableObject, UIKeyInput, UITextInputTrai
         }
 
         self.surface = surface
+
+        // Register in static registry for Ghostty callback routing
+        let ptr = UnsafeRawPointer(surface)
+        Self.surfaceRegistry[ptr] = self
+
         Logger.clauntty.info("Terminal surface created successfully")
     }
 
@@ -139,17 +201,82 @@ class TerminalSurfaceView: UIView, ObservableObject, UIKeyInput, UITextInputTrai
     }
 
     deinit {
+        NotificationCenter.default.removeObserver(self)
         if let surface = self.surface {
+            // Unregister from static registry
+            let ptr = UnsafeRawPointer(surface)
+            Self.surfaceRegistry.removeValue(forKey: ptr)
+
             ghostty_surface_free(surface)
         }
     }
 
+    // MARK: - Keyboard Handling
+
+    /// Current keyboard height (0 when hidden)
+    private var keyboardHeight: CGFloat = 0
+
+    private func setupKeyboardNotifications() {
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(keyboardWillShow(_:)),
+            name: UIResponder.keyboardWillShowNotification,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(keyboardWillHide(_:)),
+            name: UIResponder.keyboardWillHideNotification,
+            object: nil
+        )
+    }
+
+    @objc private func keyboardWillShow(_ notification: Notification) {
+        guard let userInfo = notification.userInfo,
+              let keyboardFrame = userInfo[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else {
+            return
+        }
+
+        // Get keyboard height relative to our view
+        let keyboardFrameInView = convert(keyboardFrame, from: nil)
+        let intersection = bounds.intersection(keyboardFrameInView)
+        let newKeyboardHeight = intersection.height
+
+        if newKeyboardHeight != keyboardHeight {
+            keyboardHeight = newKeyboardHeight
+            Logger.clauntty.info("Keyboard shown, height: \(newKeyboardHeight)")
+            updateSizeForKeyboard()
+        }
+    }
+
+    @objc private func keyboardWillHide(_ notification: Notification) {
+        if keyboardHeight != 0 {
+            keyboardHeight = 0
+            Logger.clauntty.info("Keyboard hidden")
+            updateSizeForKeyboard()
+        }
+    }
+
+    private func updateSizeForKeyboard() {
+        // Recalculate size accounting for keyboard
+        // The effective height is reduced by keyboard height
+        let effectiveSize = CGSize(
+            width: bounds.width,
+            height: bounds.height - keyboardHeight
+        )
+        sizeDidChange(effectiveSize)
+    }
+
     private func setupView() {
-        // Configure for Metal rendering
-        backgroundColor = .black
+        // Configure for Metal rendering - use Ghostty's default background color (#282C34)
+        // From ghostty/src/config/Config.zig: background: Color = .{ .r = 0x28, .g = 0x2C, .b = 0x34 }
+        backgroundColor = UIColor(red: 40/255.0, green: 44/255.0, blue: 52/255.0, alpha: 1.0) // #282C34
 
         // Enable user interaction for keyboard
         isUserInteractionEnabled = true
+
+        // Listen for keyboard show/hide to resize terminal
+        setupKeyboardNotifications()
 
         // Add tap gesture for keyboard and paste menu
         let tapGesture = UITapGestureRecognizer(target: self, action: #selector(handleTap(_:)))
@@ -169,6 +296,108 @@ class TerminalSurfaceView: UIView, ObservableObject, UIKeyInput, UITextInputTrai
         // Allow scroll and long press to work together
         scrollGesture.require(toFail: longPressGesture)
         tapGesture.require(toFail: longPressGesture)
+
+        // Add pinch gesture for font resizing
+        let pinchGesture = UIPinchGestureRecognizer(target: self, action: #selector(handlePinch(_:)))
+        addGestureRecognizer(pinchGesture)
+    }
+
+    // MARK: - Pinch to Zoom (Font Resize)
+
+    /// Accumulated scale for pinch gesture
+    private var pinchAccumulatedScale: CGFloat = 1.0
+
+    /// Threshold for triggering a font size change
+    private let pinchScaleThreshold: CGFloat = 0.15
+
+    @objc private func handlePinch(_ gesture: UIPinchGestureRecognizer) {
+        guard let surface = self.surface else { return }
+
+        switch gesture.state {
+        case .began:
+            pinchAccumulatedScale = 1.0
+
+        case .changed:
+            let scale = gesture.scale
+            gesture.scale = 1.0  // Reset for incremental tracking
+
+            pinchAccumulatedScale *= scale
+
+            // Check if we've crossed a threshold
+            if pinchAccumulatedScale > 1.0 + pinchScaleThreshold {
+                // Increase font size
+                increaseFontSize(surface: surface)
+                pinchAccumulatedScale = 1.0
+            } else if pinchAccumulatedScale < 1.0 - pinchScaleThreshold {
+                // Decrease font size
+                decreaseFontSize(surface: surface)
+                pinchAccumulatedScale = 1.0
+            }
+
+        case .ended, .cancelled:
+            pinchAccumulatedScale = 1.0
+
+        default:
+            break
+        }
+    }
+
+    private func increaseFontSize(surface: ghostty_surface_t) {
+        let action = "increase_font_size:1"
+        let success = ghostty_surface_binding_action(surface, action, UInt(action.utf8.count))
+        if success {
+            currentFontSize = min(currentFontSize + 1, 36)
+            FontSizePreference.save(currentFontSize)
+            let newSize = currentFontSize
+            Logger.clauntty.debug("Font size increased to \(newSize)")
+            // Notify SSH of new terminal size after font change
+            notifyTerminalSizeChanged(surface: surface)
+        }
+    }
+
+    private func decreaseFontSize(surface: ghostty_surface_t) {
+        let action = "decrease_font_size:1"
+        let success = ghostty_surface_binding_action(surface, action, UInt(action.utf8.count))
+        if success {
+            currentFontSize = max(currentFontSize - 1, 6)
+            FontSizePreference.save(currentFontSize)
+            let newSize = currentFontSize
+            Logger.clauntty.debug("Font size decreased to \(newSize)")
+            // Notify SSH of new terminal size after font change
+            notifyTerminalSizeChanged(surface: surface)
+        }
+    }
+
+    /// Reset font size to default (11pt)
+    func resetFontSize() {
+        guard let surface = self.surface else { return }
+        let action = "reset_font_size"
+        let success = ghostty_surface_binding_action(surface, action, UInt(action.utf8.count))
+        if success {
+            currentFontSize = 11.0
+            FontSizePreference.reset()
+            Logger.clauntty.info("Font size reset to default")
+            // Notify SSH of new terminal size after font change
+            notifyTerminalSizeChanged(surface: surface)
+        }
+    }
+
+    /// Query new terminal size and notify callback if changed
+    private func notifyTerminalSizeChanged(surface: ghostty_surface_t) {
+        // Small delay to let Ghostty recalculate after font change
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            guard let self = self else { return }
+
+            let surfaceSize = ghostty_surface_size(surface)
+            let newRows = surfaceSize.rows
+            let newCols = surfaceSize.columns
+
+            if newRows != self.terminalSize.rows || newCols != self.terminalSize.columns {
+                self.terminalSize = (newRows, newCols)
+                Logger.clauntty.info("Font change: terminal now \(newCols)x\(newRows)")
+                self.onTerminalSizeChanged?(newRows, newCols)
+            }
+        }
     }
 
     @objc private func handleTap(_ gesture: UITapGestureRecognizer) {
@@ -389,7 +618,7 @@ class TerminalSurfaceView: UIView, ObservableObject, UIKeyInput, UITextInputTrai
     /// so we forward to our layer and set the sublayer's frame.
     @objc(addSublayer:)
     func addSublayer(_ sublayer: CALayer) {
-        print("[Clauntty] addSublayer called, layer.bounds=\(self.layer.bounds)")
+        Logger.clauntty.debug("addSublayer called, layer.bounds=\(NSCoder.string(for: self.layer.bounds))")
 
         // Store reference first
         ghosttySublayer = sublayer
@@ -410,23 +639,37 @@ class TerminalSurfaceView: UIView, ObservableObject, UIKeyInput, UITextInputTrai
     override func layoutSubviews() {
         super.layoutSubviews()
 
-        print("[Clauntty] layoutSubviews: bounds=\(self.bounds)")
+        Logger.clauntty.debug("layoutSubviews: bounds=\(NSCoder.string(for: self.bounds))")
 
-        // sizeDidChange will update both the surface AND the sublayer
-        sizeDidChange(self.bounds.size)
+        // Account for keyboard when calculating effective size
+        let effectiveSize = CGSize(
+            width: bounds.width,
+            height: bounds.height - keyboardHeight
+        )
+        sizeDidChange(effectiveSize)
     }
 
     override func didMoveToWindow() {
         super.didMoveToWindow()
         if window != nil {
-            print("[Clauntty] didMoveToWindow: window scale=\(window!.screen.scale)")
-            // Now we have access to correct screen scale - update everything
-            sizeDidChange(self.bounds.size)
+            let scale = window!.screen.scale
+            let boundsStr = NSCoder.string(for: bounds)
+            Logger.clauntty.info("didMoveToWindow: window scale=\(scale), bounds=\(boundsStr)")
 
-            // Auto-show keyboard when terminal appears
+            // Account for keyboard when calculating effective size
+            let effectiveSize = CGSize(
+                width: bounds.width,
+                height: bounds.height - keyboardHeight
+            )
+            sizeDidChange(effectiveSize)
+
+            // Auto-show keyboard when terminal appears (only if this is the active tab)
             // Delay slightly to ensure view hierarchy is ready
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
-                _ = self?.becomeFirstResponder()
+            if isActiveTab {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+                    guard let self = self, self.isActiveTab else { return }
+                    _ = self.becomeFirstResponder()
+                }
             }
         }
     }
@@ -434,12 +677,18 @@ class TerminalSurfaceView: UIView, ObservableObject, UIKeyInput, UITextInputTrai
     func sizeDidChange(_ size: CGSize) {
         guard let surface = self.surface else { return }
 
+        // Skip invalid sizes (too small to be useful)
+        guard size.width > 50 && size.height > 50 else {
+            Logger.clauntty.debug("Skipping invalid size: \(Int(size.width))x\(Int(size.height))")
+            return
+        }
+
         // Use window's screen scale, or fall back to main screen
         let scale = window?.screen.scale ?? UIScreen.main.scale
         let pixelWidth = UInt32(size.width * scale)
         let pixelHeight = UInt32(size.height * scale)
 
-        print("[Clauntty] sizeDidChange: \(Int(size.width))x\(Int(size.height)) @\(scale)x = \(pixelWidth)x\(pixelHeight)px")
+        Logger.clauntty.info("sizeDidChange: \(Int(size.width))x\(Int(size.height))pt @\(scale)x = \(pixelWidth)x\(pixelHeight)px")
 
         ghostty_surface_set_content_scale(surface, scale, scale)
         ghostty_surface_set_size(surface, pixelWidth, pixelHeight)
@@ -455,17 +704,52 @@ class TerminalSurfaceView: UIView, ObservableObject, UIKeyInput, UITextInputTrai
         let newRows = surfaceSize.rows
         let newCols = surfaceSize.columns
 
+        Logger.clauntty.info("Terminal grid: \(newCols) cols x \(newRows) rows")
+
         if newRows != terminalSize.rows || newCols != terminalSize.columns {
             terminalSize = (newRows, newCols)
-            print("[Clauntty] Terminal grid size changed: \(newCols)x\(newRows)")
+            Logger.clauntty.info("Terminal size changed, notifying SSH: \(newCols)x\(newRows)")
             onTerminalSizeChanged?(newRows, newCols)
         }
     }
 
-    // MARK: - Focus
+    // MARK: - Focus & Active State
+
+    /// Whether this surface is the active tab
+    private var isActiveTab: Bool = true
+
+    /// Set whether this terminal surface is the active tab
+    /// Inactive surfaces don't render their cursor and lose keyboard focus
+    func setActive(_ active: Bool) {
+        guard active != isActiveTab else { return }
+        isActiveTab = active
+
+        if active {
+            // Becoming active - gain focus and show keyboard
+            Logger.clauntty.debug("Surface becoming active")
+            if !isFirstResponder {
+                _ = becomeFirstResponder()
+            }
+            focusDidChange(true)
+        } else {
+            // Becoming inactive - lose focus to hide cursor
+            Logger.clauntty.debug("Surface becoming inactive")
+            focusDidChange(false)
+            if isFirstResponder {
+                _ = resignFirstResponder()
+            }
+        }
+    }
 
     override func becomeFirstResponder() -> Bool {
+        // Only allow becoming first responder if this is the active tab
+        guard isActiveTab else {
+            Logger.clauntty.info("becomeFirstResponder: rejected - not active tab")
+            return false
+        }
+
         let result = super.becomeFirstResponder()
+        Logger.clauntty.info("becomeFirstResponder: result=\(result), isFirstResponder=\(self.isFirstResponder)")
         if result {
             focusDidChange(true)
         }
@@ -509,6 +793,8 @@ class TerminalSurfaceView: UIView, ObservableObject, UIKeyInput, UITextInputTrai
     }
 
     func insertText(_ text: String) {
+        Logger.clauntty.info("insertText called: '\(text)' (\(text.count) chars)")
+
         // Check if Ctrl modifier is active from accessory bar
         if accessoryBar.consumeCtrlModifier() {
             // Convert character to control character (Ctrl+A = 0x01, Ctrl+C = 0x03, etc.)
@@ -522,17 +808,21 @@ class TerminalSurfaceView: UIView, ObservableObject, UIKeyInput, UITextInputTrai
             }
         }
 
+        // Convert newline (LF) to carriage return (CR) for terminal compatibility
+        // iOS keyboard sends \n but terminals expect \r for Enter
+        let terminalText = text.replacingOccurrences(of: "\n", with: "\r")
+
         // Send text input to SSH (not directly to Ghostty)
         // SSH server will echo it back if needed, and we'll display via writeSSHOutput
-        if let data = text.data(using: .utf8) {
+        if let data = terminalText.data(using: .utf8) {
             onTextInput?(data)
         }
     }
 
     func deleteBackward() {
+        Logger.clauntty.info("deleteBackward called")
         // Send backspace (ASCII DEL 0x7F or BS 0x08) to SSH
         let backspace = Data([0x7F])  // DEL character
-        Logger.clauntty.debug("Keyboard input: backspace")
         onTextInput?(backspace)
     }
 

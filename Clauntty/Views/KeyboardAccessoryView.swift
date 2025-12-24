@@ -15,6 +15,9 @@ class KeyboardAccessoryView: UIView {
 
     private let ctrlButton = UIButton(type: .system)
     private let nippleView = ArrowNippleView()
+    private var stackView: UIStackView!
+    private var leadingConstraint: NSLayoutConstraint!
+    private var trailingConstraint: NSLayoutConstraint!
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -34,9 +37,13 @@ class KeyboardAccessoryView: UIView {
             self?.sendEscape()
         }
 
+        // Tab button with long-press for Shift+Tab
         let tabButton = createButton("Tab") { [weak self] in
             self?.sendTab()
         }
+        let longPress = UILongPressGestureRecognizer(target: self, action: #selector(handleTabLongPress(_:)))
+        longPress.minimumPressDuration = 0.3
+        tabButton.addGestureRecognizer(longPress)
 
         ctrlButton.setTitle("Ctrl", for: .normal)
         ctrlButton.titleLabel?.font = .systemFont(ofSize: 14, weight: .medium)
@@ -67,7 +74,7 @@ class KeyboardAccessoryView: UIView {
         }
 
         // Layout with stack view
-        let stackView = UIStackView(arrangedSubviews: [
+        stackView = UIStackView(arrangedSubviews: [
             escButton, tabButton, ctrlButton, nippleView, ctrlCButton, ctrlLButton, ctrlDButton
         ])
         stackView.axis = .horizontal
@@ -78,9 +85,13 @@ class KeyboardAccessoryView: UIView {
 
         addSubview(stackView)
 
+        // Create leading/trailing constraints that we'll update based on safe area
+        leadingConstraint = stackView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8)
+        trailingConstraint = stackView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8)
+
         NSLayoutConstraint.activate([
-            stackView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
-            stackView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+            leadingConstraint,
+            trailingConstraint,
             stackView.topAnchor.constraint(equalTo: topAnchor, constant: 6),
             stackView.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -6),
 
@@ -102,6 +113,30 @@ class KeyboardAccessoryView: UIView {
             nippleView.widthAnchor.constraint(equalTo: nippleView.heightAnchor),
             nippleView.heightAnchor.constraint(equalToConstant: 36),
         ])
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        updateConstraintsForSafeArea()
+    }
+
+    override func safeAreaInsetsDidChange() {
+        super.safeAreaInsetsDidChange()
+        updateConstraintsForSafeArea()
+    }
+
+    private func updateConstraintsForSafeArea() {
+        // For inputAccessoryView, we need to get safe area from the window
+        let safeInsets: UIEdgeInsets
+        if let window = window {
+            safeInsets = window.safeAreaInsets
+        } else {
+            safeInsets = safeAreaInsets
+        }
+
+        // Update constraints to account for safe area (plus base padding)
+        leadingConstraint.constant = max(8, safeInsets.left + 8)
+        trailingConstraint.constant = -max(8, safeInsets.right + 8)
     }
 
     private func createButton(_ title: String, action: @escaping () -> Void) -> UIButton {
@@ -133,6 +168,17 @@ class KeyboardAccessoryView: UIView {
 
     private func sendTab() {
         onKeyInput?(Data([0x09]))
+    }
+
+    @objc private func handleTabLongPress(_ gesture: UILongPressGestureRecognizer) {
+        if gesture.state == .began {
+            sendShiftTab()
+        }
+    }
+
+    private func sendShiftTab() {
+        // Shift+Tab = CSI Z (Back Tab / CBT)
+        onKeyInput?(Data([0x1B, 0x5B, 0x5A]))  // ESC [ Z
     }
 
     private func toggleCtrl() {
@@ -198,8 +244,10 @@ class ArrowNippleView: UIView {
 
     private let nipple = UIView()
     private var repeatTimer: Timer?
+    private var repeatDelayTimer: Timer?
     private var currentDirection: Direction?
     private var currentMagnitude: CGFloat = 0
+    private var hasSentInitialInput = false
 
     /// Minimum threshold before any arrow is triggered (in points)
     private let activationThreshold: CGFloat = 20.0
@@ -207,11 +255,14 @@ class ArrowNippleView: UIView {
     /// Maximum drag distance for fastest repeat (in points)
     private let maxDragDistance: CGFloat = 50.0
 
+    /// Delay before repeat starts (to distinguish flick from hold)
+    private let repeatDelay: TimeInterval = 0.3
+
     /// Slowest repeat interval (at activation threshold)
-    private let slowestRepeat: TimeInterval = 0.25
+    private let slowestRepeat: TimeInterval = 0.2
 
     /// Fastest repeat interval (at max drag)
-    private let fastestRepeat: TimeInterval = 0.05
+    private let fastestRepeat: TimeInterval = 0.04
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -255,13 +306,20 @@ class ArrowNippleView: UIView {
             let absY = abs(translation.y)
             let magnitude = max(absX, absY)
 
+            // Animate nipple offset (always, even below threshold)
+            let maxOffset: CGFloat = 10
+            let offsetX = min(max(translation.x, -maxOffset), maxOffset)
+            let offsetY = min(max(translation.y, -maxOffset), maxOffset)
+            nipple.transform = CGAffineTransform(translationX: offsetX, y: offsetY)
+
             // Only activate if past threshold
             guard magnitude > activationThreshold else {
-                // Below threshold - just animate nipple, no arrow input
-                let maxOffset: CGFloat = 8
-                let offsetX = min(max(translation.x, -maxOffset), maxOffset)
-                let offsetY = min(max(translation.y, -maxOffset), maxOffset)
-                nipple.transform = CGAffineTransform(translationX: offsetX, y: offsetY)
+                // Below threshold - cancel any pending repeat
+                if currentDirection != nil {
+                    stopRepeat()
+                    currentDirection = nil
+                    hasSentInitialInput = false
+                }
                 return
             }
 
@@ -276,23 +334,26 @@ class ArrowNippleView: UIView {
             // Update magnitude for repeat speed calculation
             currentMagnitude = magnitude
 
-            // If direction changed or first activation, send key and start repeat
+            // If direction changed or first activation
             if currentDirection != newDirection {
+                stopRepeat()
                 currentDirection = newDirection
-                onArrowInput?(newDirection)
-                startRepeat()
+                hasSentInitialInput = false
             }
 
-            // Animate nipple offset (cap at max visual offset)
-            let maxOffset: CGFloat = 10
-            let offsetX = min(max(translation.x, -maxOffset), maxOffset)
-            let offsetY = min(max(translation.y, -maxOffset), maxOffset)
-            nipple.transform = CGAffineTransform(translationX: offsetX, y: offsetY)
+            // Send initial input once when direction is first set
+            if !hasSentInitialInput {
+                hasSentInitialInput = true
+                onArrowInput?(newDirection)
+                // Start delay timer - repeat only starts after holding
+                startRepeatDelay()
+            }
 
         case .ended, .cancelled:
             stopRepeat()
             currentDirection = nil
             currentMagnitude = 0
+            hasSentInitialInput = false
 
             // Animate nipple back to center
             UIView.animate(withDuration: 0.15, delay: 0, options: .curveEaseOut) {
@@ -315,12 +376,21 @@ class ArrowNippleView: UIView {
         return slowestRepeat - (normalizedMagnitude * (slowestRepeat - fastestRepeat))
     }
 
+    private func startRepeatDelay() {
+        repeatDelayTimer?.invalidate()
+        repeatDelayTimer = Timer.scheduledTimer(withTimeInterval: repeatDelay, repeats: false) { [weak self] _ in
+            // After delay, start repeating if still holding
+            self?.startRepeat()
+        }
+    }
+
     private func startRepeat() {
-        stopRepeat()
+        repeatTimer?.invalidate()
         scheduleNextRepeat()
     }
 
     private func scheduleNextRepeat() {
+        guard currentDirection != nil else { return }
         let interval = repeatInterval()
         repeatTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: false) { [weak self] _ in
             guard let self = self, let dir = self.currentDirection else { return }
@@ -330,6 +400,8 @@ class ArrowNippleView: UIView {
     }
 
     private func stopRepeat() {
+        repeatDelayTimer?.invalidate()
+        repeatDelayTimer = nil
         repeatTimer?.invalidate()
         repeatTimer = nil
     }

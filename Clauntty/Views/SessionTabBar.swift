@@ -38,6 +38,8 @@ struct SessionTabBar: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 6)
         }
+        // Respect safe area insets for notch/Dynamic Island in landscape
+        .safeAreaPadding(.horizontal)
         .background(Color(.systemGray6))
     }
 }

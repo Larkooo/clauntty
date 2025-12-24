@@ -368,6 +368,67 @@ for el in data:
             --predicate 'subsystem == "com.clauntty" OR subsystem == "com.mitchellh.ghostty"'
         ;;
 
+    settings|prefs)
+        # Read app settings/saved connections from simulator
+        udid=$(get_udid)
+        if [ -z "$udid" ]; then
+            echo -e "${RED}No booted simulator found${NC}"
+            exit 1
+        fi
+
+        # Find the app's preferences plist
+        plist_path=$(find ~/Library/Developer/CoreSimulator/Devices/"$udid"/data/Containers/Data/Application/*/Library/Preferences/com.clauntty.app.plist 2>/dev/null | head -1)
+
+        if [ -z "$plist_path" ]; then
+            echo -e "${RED}App preferences not found. Run the app first.${NC}"
+            exit 1
+        fi
+
+        echo -e "${BLUE}Reading saved connections...${NC}"
+        python3 - "$plist_path" <<'PYTHON'
+import sys
+import plistlib
+import json
+
+plist_path = sys.argv[1]
+with open(plist_path, 'rb') as f:
+    data = plistlib.load(f)
+
+if 'savedConnections' not in data:
+    print("No saved connections found")
+    sys.exit(0)
+
+# savedConnections is JSON-encoded bytes
+connections = json.loads(data['savedConnections'])
+
+print(f"\nSaved Connections ({len(connections)} total):")
+print("=" * 60)
+
+for i, conn in enumerate(connections, 1):
+    name = conn.get('name', '(unnamed)')
+    host = conn.get('host', '?')
+    port = conn.get('port', 22)
+    username = conn.get('username', '?')
+    auth = conn.get('authMethod', {})
+
+    if isinstance(auth, dict):
+        if 'password' in auth:
+            auth_str = "password"
+        elif 'sshKey' in auth:
+            key_id = auth['sshKey'].get('keyId', '?')
+            auth_str = f"sshKey({key_id[:16]}...)" if len(key_id) > 16 else f"sshKey({key_id})"
+        else:
+            auth_str = str(auth)
+    else:
+        auth_str = str(auth)
+
+    print(f"\n{i}. {name}")
+    print(f"   Host: {host}:{port}")
+    print(f"   User: {username}")
+    print(f"   Auth: {auth_str}")
+PYTHON
+        ;;
+
     help|*)
         cat <<EOF
 Clauntty Simulator CLI (uses IDB - runs in background, won't interrupt your work)
@@ -407,6 +468,7 @@ Test Sequences:
 Debugging:
   ui [filter]              List UI elements with tap coordinates
   logs                     Stream app logs
+  settings                 Show saved connections from app prefs
 
 Examples:
   $0 run --preview-terminal

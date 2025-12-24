@@ -42,6 +42,18 @@ enum PreviewMode: String {
     }
 }
 
+/// Launch arguments for auto-connecting
+enum LaunchArgs {
+    /// Get connection name from --connect <name> argument
+    static func autoConnectName() -> String? {
+        let args = CommandLine.arguments
+        if let idx = args.firstIndex(of: "--connect"), idx + 1 < args.count {
+            return args[idx + 1]
+        }
+        return nil
+    }
+}
+
 @main
 struct ClaunttyApp: App {
     @StateObject private var connectionStore = ConnectionStore()

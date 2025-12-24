@@ -112,8 +112,20 @@ class GhosttyApp: ObservableObject {
             return true
 
         case GHOSTTY_ACTION_SET_TITLE:
-            // Could update window title if needed
-            Logger.clauntty.debug("Action: set_title")
+            // Extract title and route to the correct surface
+            if target.tag == GHOSTTY_TARGET_SURFACE,
+               let surfacePtr = target.target.surface {
+                let titlePtr = action.action.set_title.title
+                if let titlePtr = titlePtr, let title = String(cString: titlePtr, encoding: .utf8) {
+                    DispatchQueue.main.async {
+                        if let view = TerminalSurfaceView.find(surface: surfacePtr) {
+                            view.title = title
+                            view.onTitleChanged?(title)
+                            Logger.clauntty.debug("Title set: \(title.prefix(30))")
+                        }
+                    }
+                }
+            }
             return true
 
         case GHOSTTY_ACTION_CELL_SIZE:
