@@ -343,8 +343,15 @@ class SSHConnection: ObservableObject {
         Logger.clauntty.info("executeWithStdin: data written, sending EOF")
 
         // Send EOF to indicate we're done writing (close output side of channel)
-        try await childChannel.close(mode: .output).get()
-        Logger.clauntty.info("executeWithStdin: EOF sent, waiting for close")
+        // The channel might already be closed if the command completed very quickly,
+        // so we handle ChannelError.alreadyClosed gracefully
+        do {
+            try await childChannel.close(mode: .output).get()
+            Logger.clauntty.info("executeWithStdin: EOF sent, waiting for close")
+        } catch let error as ChannelError where error == .alreadyClosed {
+            Logger.clauntty.info("executeWithStdin: channel already closed (command completed quickly)")
+            return
+        }
 
         // Wait for command to complete
         try await childChannel.closeFuture.get()

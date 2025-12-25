@@ -161,8 +161,10 @@ class SessionManager: ObservableObject {
             shellCommand = deployer.shellCommand(sessionId: sessionId)
             Logger.clauntty.info("SessionManager: using rtach session: \(sessionId.prefix(8))...")
 
-            // Update last accessed time for this session
-            try? await deployer.updateLastAccessed(sessionId: sessionId)
+            // Update last accessed time for this session (use fresh connection)
+            // The deployer's cached connection might be stale, so create a new deployer
+            let freshDeployer = RtachDeployer(connection: connection)
+            try? await freshDeployer.updateLastAccessed(sessionId: sessionId)
         }
 
         // Create a new channel for this session with the correct terminal size

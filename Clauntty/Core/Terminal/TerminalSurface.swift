@@ -8,7 +8,7 @@ import os.log
 /// Manages the persisted font size preference for terminals
 enum FontSizePreference {
     private static let key = "terminalFontSize"
-    private static let defaultSize: Float = 11.0
+    private static let defaultSize: Float = 9.0
     private static let minSize: Float = 6.0
     private static let maxSize: Float = 36.0
 
@@ -120,6 +120,13 @@ class TerminalSurfaceView: UIView, ObservableObject, UIKeyInput, UITextInputTrai
 
     /// Callback when terminal sets title via OSC escape sequence
     var onTitleChanged: ((String) -> Void)?
+
+    /// Callback when user scrolls near the top of scrollback (for lazy loading)
+    /// Called with the current offset from top (0 = at top)
+    var onScrollNearTop: ((UInt) -> Void)?
+
+    /// Threshold in rows for triggering onScrollNearTop (default: 100 rows from top)
+    var scrollNearTopThreshold: UInt = 100
 
     // MARK: - Font Size
 
@@ -368,7 +375,7 @@ class TerminalSurfaceView: UIView, ObservableObject, UIKeyInput, UITextInputTrai
         }
     }
 
-    /// Reset font size to default (11pt)
+    /// Reset font size to default (9pt)
     func resetFontSize() {
         guard let surface = self.surface else { return }
         let action = "reset_font_size"
@@ -595,6 +602,15 @@ class TerminalSurfaceView: UIView, ObservableObject, UIKeyInput, UITextInputTrai
                 // Send scroll to Ghostty (y positive = scroll up/back in history)
                 ghostty_surface_mouse_scroll(surface, 0, Double(scrollLines), 0)
                 scrollAccumulator = scrollAccumulator.truncatingRemainder(dividingBy: scrollThreshold)
+
+                // Check if we're near the top of scrollback (for lazy loading)
+                // Skip this when on alternate screen - no scrollback there
+                if let callback = onScrollNearTop, !isAlternateScreen {
+                    let offset = scrollbackOffset
+                    if offset < scrollNearTopThreshold {
+                        callback(offset)
+                    }
+                }
             }
 
             // Reset translation for incremental tracking
@@ -731,6 +747,30 @@ class TerminalSurfaceView: UIView, ObservableObject, UIKeyInput, UITextInputTrai
                 _ = becomeFirstResponder()
             }
             focusDidChange(true)
+
+            // Force size update to ensure Metal layer frame is correct after tab switch
+            // This fixes rendering bugs where the last row gets clipped
+            let effectiveSize = CGSize(
+                width: bounds.width,
+                height: bounds.height - keyboardHeight
+            )
+            sizeDidChange(effectiveSize)
+
+            // Force ghostty to redraw the terminal content
+            // This fixes the blank screen issue when switching back to a tab
+            if let surface = self.surface {
+                ghostty_surface_refresh(surface)
+                Logger.clauntty.info("Tab active: called ghostty_surface_refresh")
+            }
+
+            // Force the remote shell to redraw by sending a SIGWINCH
+            // This triggers the shell/app (like Claude Code) to repaint
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self else { return }
+                // Always send current size to force remote redraw
+                self.onTerminalSizeChanged?(self.terminalSize.rows, self.terminalSize.columns)
+                Logger.clauntty.info("Tab active: sent SIGWINCH to force remote redraw")
+            }
         } else {
             // Becoming inactive - lose focus to hide cursor
             Logger.clauntty.debug("Surface becoming inactive")
@@ -784,6 +824,60 @@ class TerminalSurfaceView: UIView, ObservableObject, UIKeyInput, UITextInputTrai
             ghostty_surface_write_pty_output(surface, ptr, UInt(data.count))
         }
         Logger.clauntty.debug("SSH output written: \(data.count) bytes")
+    }
+
+    /// Prepend scrollback data to the beginning of the terminal's scrollback buffer.
+    /// This is used for lazy-loading older scrollback history after the current screen
+    /// has been displayed.
+    /// - Parameter data: Raw terminal data to parse and prepend
+    /// - Returns: true if successful, false otherwise
+    @discardableResult
+    func prependScrollback(_ data: Data) -> Bool {
+        guard let surface = self.surface else {
+            Logger.clauntty.warning("Cannot prepend scrollback: no surface")
+            return false
+        }
+
+        Logger.clauntty.info("prependScrollback: starting with \(data.count) bytes")
+
+        // Copy to contiguous array to ensure proper alignment
+        let bytes = [UInt8](data)
+        Logger.clauntty.info("prependScrollback: copied to array, calling ghostty")
+
+        let success = bytes.withUnsafeBufferPointer { buffer -> Bool in
+            guard let ptr = buffer.baseAddress else {
+                Logger.clauntty.error("prependScrollback: buffer has no base address")
+                return false
+            }
+            // Cast UInt8 pointer to CChar pointer (both are 1-byte aligned)
+            return ptr.withMemoryRebound(to: CChar.self, capacity: bytes.count) { charPtr in
+                return ghostty_surface_prepend_scrollback(surface, charPtr, UInt(bytes.count))
+            }
+        }
+
+        Logger.clauntty.info("prependScrollback: ghostty returned \(success)")
+
+        if success {
+            Logger.clauntty.info("Prepended \(data.count) bytes of scrollback")
+        } else {
+            Logger.clauntty.warning("Failed to prepend scrollback")
+        }
+        return success
+    }
+
+    /// Get the current scrollback offset (distance from top of scrollback buffer).
+    /// Returns 0 when viewport is at the very top, increases as user scrolls down.
+    /// This can be used to detect when to lazy-load additional scrollback.
+    var scrollbackOffset: UInt {
+        guard let surface = self.surface else { return 0 }
+        return ghostty_surface_scrollback_offset(surface)
+    }
+
+    /// Returns true if the terminal is on the alternate screen (vim, less, htop, etc.)
+    /// When on the alternate screen, there is no scrollback and scroll events go to the app.
+    var isAlternateScreen: Bool {
+        guard let surface = self.surface else { return false }
+        return ghostty_surface_is_alternate_screen(surface)
     }
 
     // MARK: - UIKeyInput

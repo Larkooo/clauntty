@@ -104,6 +104,11 @@ struct ConnectionListView: View {
                     onSwitchToWebTab: { webTab in
                         sessionManager.switchTo(webTab)
                         dismiss()
+                    },
+                    onRefreshPorts: { [deployerForPicker] in
+                        guard let deployer = deployerForPicker else { return [] }
+                        let scanner = PortScanner(connection: deployer.connection)
+                        return (try? await scanner.listListeningPorts()) ?? []
                     }
                 )
             }

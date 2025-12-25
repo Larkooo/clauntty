@@ -151,7 +151,7 @@ struct ContentView: View {
         }
     }
 
-    /// Check for --connect <name> launch argument and auto-connect
+    /// Check for --connect <name> and --tabs launch arguments
     private func checkAutoConnect() {
         guard !hasCheckedAutoConnect else { return }
         hasCheckedAutoConnect = true
@@ -172,18 +172,55 @@ struct ContentView: View {
 
         Logger.clauntty.info("Auto-connect: found connection \(connection.name) (\(connection.host))")
 
-        // Create session and connect
+        // Check for multi-tab specs
+        let tabSpecs = LaunchArgs.tabSpecs()
+
         Task {
             do {
                 // First, establish SSH and deploy rtach
                 Logger.clauntty.info("Auto-connect: establishing SSH and deploying rtach...")
-                let _ = try await sessionManager.connectAndListSessions(for: connection)
-                Logger.clauntty.info("Auto-connect: rtach deployed, creating session...")
+                let (rtachSessions, _) = try await sessionManager.connectAndListSessions(for: connection) ?? ([], nil)
+                Logger.clauntty.info("Auto-connect: rtach deployed, found \(rtachSessions.count) existing sessions")
 
-                // Now create and connect the terminal session
-                let session = sessionManager.createSession(for: connection)
-                try await sessionManager.connect(session: session)
-                Logger.clauntty.info("Auto-connect: session connected successfully")
+                if let specs = tabSpecs {
+                    // Multi-tab mode
+                    Logger.clauntty.info("Auto-connect: opening \(specs.count) tabs")
+                    for spec in specs {
+                        switch spec {
+                        case .session(let index):
+                            // Connect to existing rtach session by index
+                            if index < rtachSessions.count {
+                                let rtachSession = rtachSessions[index]
+                                Logger.clauntty.info("Auto-connect: opening rtach session \(index): \(rtachSession.id)")
+                                let session = sessionManager.createSession(for: connection)
+                                session.rtachSessionId = rtachSession.id
+                                try await sessionManager.connect(session: session, rtachSessionId: rtachSession.id)
+                            } else {
+                                Logger.clauntty.warning("Auto-connect: session index \(index) out of range (have \(rtachSessions.count) sessions), creating new")
+                                let session = sessionManager.createSession(for: connection)
+                                try await sessionManager.connect(session: session)
+                            }
+
+                        case .newSession:
+                            // Create a new session
+                            Logger.clauntty.info("Auto-connect: creating new session")
+                            let session = sessionManager.createSession(for: connection)
+                            try await sessionManager.connect(session: session)
+
+                        case .port(let portNum):
+                            // Port forward - create web tab
+                            Logger.clauntty.info("Auto-connect: forwarding port \(portNum)")
+                            let remotePort = RemotePort(id: portNum, port: portNum, process: nil, address: "127.0.0.1")
+                            _ = try await sessionManager.createWebTab(for: remotePort, config: connection)
+                        }
+                    }
+                    Logger.clauntty.info("Auto-connect: \(specs.count) tabs opened successfully")
+                } else {
+                    // Single tab mode (original behavior)
+                    let session = sessionManager.createSession(for: connection)
+                    try await sessionManager.connect(session: session)
+                    Logger.clauntty.info("Auto-connect: session connected successfully")
+                }
             } catch {
                 Logger.clauntty.error("Auto-connect failed: \(error.localizedDescription)")
             }

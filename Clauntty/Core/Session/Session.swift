@@ -115,6 +115,30 @@ class Session: ObservableObject, Identifiable {
     /// Called when session state changes
     var onStateChanged: ((State) -> Void)?
 
+    /// Called when old scrollback is received (to prepend to terminal)
+    var onScrollbackReceived: ((Data) -> Void)?
+
+    // MARK: - Scrollback Request State
+
+    /// State machine for scrollback request/response
+    private enum ScrollbackState {
+        case idle                          // Not requesting scrollback
+        case waitingForHeader              // Sent request, waiting for 5-byte header
+        case receivingData(remaining: Int) // Receiving scrollback data
+    }
+
+    /// Current scrollback request state
+    private var scrollbackState: ScrollbackState = .idle
+
+    /// Buffer for accumulating scrollback response
+    private var scrollbackResponseBuffer = Data()
+
+    /// Buffer for partial header (if header arrives split across packets)
+    private var headerBuffer = Data()
+
+    /// Whether we've already requested scrollback for this session
+    private var scrollbackRequested = false
+
     // MARK: - Initialization
 
     init(connectionConfig: SavedConnection) {
@@ -156,6 +180,18 @@ class Session: ObservableObject, Identifiable {
 
     /// Handle data received from SSH
     func handleDataReceived(_ data: Data) {
+        // If we're receiving a scrollback response, handle it separately
+        if case .idle = scrollbackState {
+            // Normal data flow
+            handleNormalData(data)
+        } else {
+            // Scrollback response handling
+            handleScrollbackResponse(data)
+        }
+    }
+
+    /// Handle normal terminal data
+    private func handleNormalData(_ data: Data) {
         // Parse OSC 133 sequences for shell integration
         parseOSC133(data)
 
@@ -175,6 +211,82 @@ class Session: ObservableObject, Identifiable {
         onDataReceived?(data)
     }
 
+    /// Handle scrollback response data (when in scrollback receive mode)
+    private func handleScrollbackResponse(_ data: Data) {
+        var remainingData = data
+        var processedAny = false
+
+        while !remainingData.isEmpty {
+            switch scrollbackState {
+            case .idle:
+                // Shouldn't happen, but if we get here, forward remaining data normally
+                if processedAny {
+                    handleNormalData(remainingData)
+                }
+                return
+
+            case .waitingForHeader:
+                // Accumulate bytes until we have 5 bytes for the header
+                let headerSize = 5  // 1 byte type + 4 bytes length
+                let needed = headerSize - headerBuffer.count
+                let available = min(needed, remainingData.count)
+
+                headerBuffer.append(remainingData.prefix(available))
+                remainingData = remainingData.dropFirst(available)
+                processedAny = true
+
+                if headerBuffer.count >= headerSize {
+                    // Parse header: [type: 1 byte][length: 4 bytes little-endian]
+                    let type = headerBuffer[0]
+                    // Use loadUnaligned since the UInt32 is at offset 1 (not 4-byte aligned)
+                    let length = headerBuffer.withUnsafeBytes { ptr -> UInt32 in
+                        ptr.loadUnaligned(fromByteOffset: 1, as: UInt32.self)
+                    }
+
+                    Logger.clauntty.info("Scrollback header: type=\(type), length=\(length)")
+
+                    if type == 1 && length > 0 {
+                        // Type 1 = scrollback, transition to receiving data
+                        scrollbackState = .receivingData(remaining: Int(length))
+                        scrollbackResponseBuffer.removeAll(keepingCapacity: true)
+                    } else if length == 0 {
+                        // Empty scrollback response
+                        Logger.clauntty.info("Scrollback response: empty (all data was in initial send)")
+                        scrollbackState = .idle
+                        headerBuffer.removeAll()
+                    } else {
+                        // Unknown type, abort
+                        Logger.clauntty.warning("Unknown scrollback response type: \(type)")
+                        scrollbackState = .idle
+                        headerBuffer.removeAll()
+                    }
+                    headerBuffer.removeAll()
+                }
+
+            case .receivingData(let remaining):
+                let toRead = min(remaining, remainingData.count)
+                scrollbackResponseBuffer.append(remainingData.prefix(toRead))
+                remainingData = remainingData.dropFirst(toRead)
+                processedAny = true
+
+                let newRemaining = remaining - toRead
+                if newRemaining <= 0 {
+                    // Complete! Deliver the scrollback
+                    let byteCount = self.scrollbackResponseBuffer.count
+                    Logger.clauntty.info("Scrollback response complete: \(byteCount) bytes")
+                    let scrollbackData = self.scrollbackResponseBuffer
+                    self.scrollbackResponseBuffer.removeAll()
+                    self.scrollbackState = .idle
+
+                    // Deliver to callback
+                    self.onScrollbackReceived?(scrollbackData)
+                } else {
+                    self.scrollbackState = .receivingData(remaining: newRemaining)
+                }
+            }
+        }
+    }
+
     // MARK: - OSC 133 Parsing (Shell Integration)
 
     /// Parse OSC 133 sequences to detect prompt state
@@ -184,20 +296,6 @@ class Session: ObservableObject, Identifiable {
         let ESC: UInt8 = 0x1B
         let BRACKET: UInt8 = 0x5D  // ]
         let SEMICOLON: UInt8 = 0x3B  // ;
-
-        // Debug: Log if we see any ESC sequences
-        var foundEsc = false
-        for i in 0..<bytes.count {
-            if bytes[i] == ESC && i + 1 < bytes.count && bytes[i + 1] == BRACKET {
-                foundEsc = true
-                let preview = bytes[i..<min(i + 10, bytes.count)]
-                Logger.clauntty.info("Session \(self.id.uuidString.prefix(8)): found ESC] at \(i), bytes: \(preview.map { String(format: "%02X", $0) }.joined(separator: " "))")
-            }
-        }
-        if !foundEsc && bytes.count < 200 {
-            // Log small chunks to see what we're receiving
-            Logger.clauntty.info("Session \(self.id.uuidString.prefix(8)): received \(bytes.count) bytes, no ESC] found")
-        }
 
         // Look for ESC ] 133 ; <marker>
         for i in 0..<bytes.count {
@@ -220,7 +318,6 @@ class Session: ObservableObject, Identifiable {
                 newState = .promptDisplayed
                 if !isWaitingForInput {
                     isWaitingForInput = true
-                    Logger.clauntty.info("Session \(self.id.uuidString.prefix(8)): waiting for input (OSC 133;A)")
                 }
             case 0x42, 0x43:  // 'B' or 'C' - Command started/executing
                 newState = .commandRunning
@@ -231,10 +328,7 @@ class Session: ObservableObject, Identifiable {
                 continue
             }
 
-            if promptState != newState {
-                promptState = newState
-                Logger.clauntty.debug("Session \(self.id.uuidString.prefix(8)): prompt state -> \(String(describing: newState))")
-            }
+            promptState = newState
         }
     }
 
@@ -307,6 +401,33 @@ class Session: ObservableObject, Identifiable {
             channel.triggerUserOutboundEvent(windowChange, promise: nil)
         }
         Logger.clauntty.debug("Session \(self.id.uuidString.prefix(8)): window change \(columns)x\(rows)")
+    }
+
+    // MARK: - Scrollback Request
+
+    /// Request old scrollback from rtach (everything before the initial 16KB)
+    /// This is called after connection is established to load the full history.
+    func requestScrollback() {
+        guard !scrollbackRequested else {
+            Logger.clauntty.debug("Session \(self.id.uuidString.prefix(8)): scrollback already requested")
+            return
+        }
+
+        guard channelHandler != nil else {
+            Logger.clauntty.warning("Session \(self.id.uuidString.prefix(8)): cannot request scrollback, no channel")
+            return
+        }
+
+        scrollbackRequested = true
+        scrollbackState = .waitingForHeader
+        headerBuffer.removeAll()
+
+        // Send rtach request_scrollback packet
+        // Format: [type: 1 byte = 5][length: 1 byte = 0]
+        let packet = Data([5, 0])  // MessageType.request_scrollback = 5, length = 0
+        channelHandler?.sendToRemote(packet)
+
+        Logger.clauntty.info("Session \(self.id.uuidString.prefix(8)): requested old scrollback from rtach")
     }
 
     // MARK: - Scrollback Persistence

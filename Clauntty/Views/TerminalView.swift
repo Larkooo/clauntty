@@ -66,6 +66,7 @@ struct TerminalView: View {
                         session.sendWindowChange(rows: rows, columns: columns)
                     },
                     onSurfaceReady: { surface in
+                        Logger.clauntty.info("onSurfaceReady called for session \(session.id.uuidString.prefix(8)), state=\(String(describing: session.state))")
                         self.terminalSurface = surface
                         connectSession(surface: surface)
                     }
@@ -114,17 +115,16 @@ struct TerminalView: View {
     }
 
     private func connectSession(surface: TerminalSurfaceView) {
-        // Skip if already connected
+        Logger.clauntty.info("connectSession called for session \(session.id.uuidString.prefix(8)), state=\(String(describing: session.state))")
+
+        // Always wire up the display - we need this for data flow regardless of connection state
+        wireSessionToSurface(surface: surface)
+
+        // If not disconnected, connection is already in progress or complete
         guard session.state == .disconnected else {
-            // Already connecting or connected - just wire up display
-            if session.state == .connected {
-                wireSessionToSurface(surface: surface)
-            }
+            Logger.clauntty.info("connectSession: session not disconnected, returning")
             return
         }
-
-        // Wire session data → terminal display
-        wireSessionToSurface(surface: surface)
 
         // Start connection via SessionManager
         Task {
@@ -154,16 +154,35 @@ struct TerminalView: View {
     }
 
     private func wireSessionToSurface(surface: TerminalSurfaceView) {
+        Logger.clauntty.info("wireSessionToSurface called for session \(session.id.uuidString.prefix(8))")
+
         // Set up callback for session data → terminal display
+        // Capture surface strongly - it's safe because session doesn't own the view
         session.onDataReceived = { data in
             DispatchQueue.main.async {
                 surface.writeSSHOutput(data)
             }
         }
 
+        // Set up callback for old scrollback → prepend to terminal
+        session.onScrollbackReceived = { [weak surface] data in
+            guard let surface = surface else { return }
+            DispatchQueue.main.async {
+                surface.prependScrollback(data)
+            }
+        }
+
         // Set up callback for terminal title changes → session title
         surface.onTitleChanged = { [weak session] title in
             session?.dynamicTitle = title
+        }
+
+        // Set up callback for scroll-triggered scrollback loading
+        // When user scrolls near the top, request old scrollback
+        // Skip if on alternate screen (vim, less, Claude Code) - no scrollback there
+        surface.onScrollNearTop = { [weak session, weak surface] offset in
+            guard let surface = surface, !surface.isAlternateScreen else { return }
+            session?.requestScrollback()
         }
     }
 }

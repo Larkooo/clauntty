@@ -32,7 +32,7 @@ struct RtachSession: Identifiable {
 /// or let new sessions use the new binary while old sessions continue on the old one.
 /// This allows updates without killing existing sessions.
 class RtachDeployer {
-    private let connection: SSHConnection
+    let connection: SSHConnection
 
     /// Remote path where rtach is installed
     static let remoteBinPath = "~/.clauntty/bin/rtach"
@@ -43,7 +43,25 @@ class RtachDeployer {
     /// Expected rtach version - must match rtach's version constant
     /// Increment this when rtach is updated to force redeployment
     /// 1.4.0 - Added shell integration (OSC 133) for input detection
-    static let expectedVersion = "1.4.0"
+    /// 1.4.1 - Fixed SIGWINCH handling to check on every loop iteration
+    /// 1.5.0 - Limit initial scrollback to 16KB for faster reconnects
+    /// 1.6.0 - Add request_scrollback for on-demand old scrollback loading
+    /// 1.6.1 - Fix ResponseHeader padding (use packed struct for exact 5-byte header)
+    /// 1.7.0 - Add client_id to attach packet to prevent duplicate connections from same device
+    /// 1.8.0 - Skip scrollback on attach when in alternate screen mode (fixes TUI app corruption)
+    static let expectedVersion = "1.8.0"
+
+    /// Unique client ID for this app instance (prevents duplicate connections from same device)
+    /// Generated once and stored in UserDefaults - no device info leaves the app
+    static var clientId: String {
+        let key = "rtach_client_id"
+        if let existing = UserDefaults.standard.string(forKey: key) {
+            return existing
+        }
+        let newId = UUID().uuidString
+        UserDefaults.standard.set(newId, forKey: key)
+        return newId
+    }
 
     init(connection: SSHConnection) {
         self.connection = connection
@@ -71,15 +89,15 @@ class RtachDeployer {
         // 3. Ensure sessions directory exists
         _ = try await connection.executeCommand("mkdir -p \(Self.remoteSessionsPath)")
 
-        // 4. Return the wrapped shell command
+        // 4. Return the wrapped shell command with client ID
         let sessionPath = "\(Self.remoteSessionsPath)/\(sessionId)"
-        return "\(Self.remoteBinPath) -A \(sessionPath) $SHELL"
+        return "\(Self.remoteBinPath) -A -C \(Self.clientId) \(sessionPath) $SHELL"
     }
 
     /// Get the shell command for rtach (assumes already deployed)
     func shellCommand(sessionId: String = "default") -> String {
         let sessionPath = "\(Self.remoteSessionsPath)/\(sessionId)"
-        return "\(Self.remoteBinPath) -A \(sessionPath) $SHELL"
+        return "\(Self.remoteBinPath) -A -C \(Self.clientId) \(sessionPath) $SHELL"
     }
 
     /// List existing rtach sessions on the remote server
@@ -175,9 +193,9 @@ class RtachDeployer {
         Logger.clauntty.info("RtachDeployer.ensureDeployed: done")
     }
 
-    // MARK: - Claude Code Hook
+    // MARK: - Claude Code Hooks
 
-    /// The Stop hook we inject to emit OSC 133;A when Claude finishes responding
+    /// The Stop hook emits OSC 133;A when Claude finishes responding (prompt displayed)
     private static let claunttyStopHook: [String: Any] = [
         "hooks": [
             [
@@ -187,7 +205,19 @@ class RtachDeployer {
         ]
     ]
 
-    /// Deploy Claude Code hook for input detection (merges with existing settings)
+    /// The UserPromptSubmit hook emits OSC 133;B when user submits input (command started)
+    private static let claunttyPromptSubmitHook: [String: Any] = [
+        "hooks": [
+            [
+                "type": "command",
+                "command": "printf '\\e]133;B\\a' > /dev/tty"
+            ]
+        ]
+    ]
+
+    /// Deploy Claude Code hooks for input detection (merges with existing settings)
+    /// - Stop hook: sends 133;A (prompt displayed, waiting for input)
+    /// - UserPromptSubmit hook: sends 133;B (command started, processing)
     private func deployClaudeHook() async throws {
         // Read existing settings
         let output = try await connection.executeCommand(
@@ -202,44 +232,75 @@ class RtachDeployer {
             return
         }
 
-        // Check if our hook already exists
-        if hasClaudeHook(in: settings) {
-            Logger.clauntty.info("Claude Code hook already configured")
+        // Check if our hooks already exist
+        let (hasStop, hasPromptSubmit) = hasClaudeHooks(in: settings)
+        if hasStop && hasPromptSubmit {
+            Logger.clauntty.info("Claude Code hooks already configured")
             return
         }
 
-        // Merge our hook into settings
+        // Merge our hooks into settings
         var hooks = settings["hooks"] as? [String: Any] ?? [:]
-        var stopHooks = hooks["Stop"] as? [[String: Any]] ?? []
 
-        // Append our hook
-        stopHooks.append(Self.claunttyStopHook)
-        hooks["Stop"] = stopHooks
+        if !hasStop {
+            var stopHooks = hooks["Stop"] as? [[String: Any]] ?? []
+            stopHooks.append(Self.claunttyStopHook)
+            hooks["Stop"] = stopHooks
+        }
+
+        if !hasPromptSubmit {
+            var promptSubmitHooks = hooks["UserPromptSubmit"] as? [[String: Any]] ?? []
+            promptSubmitHooks.append(Self.claunttyPromptSubmitHook)
+            hooks["UserPromptSubmit"] = promptSubmitHooks
+        }
+
         settings["hooks"] = hooks
 
         try await writeClaudeSettings(settings)
-        Logger.clauntty.info("Claude Code hook deployed")
+        Logger.clauntty.info("Claude Code hooks deployed")
     }
 
-    /// Check if our OSC 133 hook is already present
-    private func hasClaudeHook(in settings: [String: Any]) -> Bool {
-        guard let hooks = settings["hooks"] as? [String: Any],
-              let stopHooks = hooks["Stop"] as? [[String: Any]] else {
-            return false
+    /// Check if our OSC 133 hooks are already present
+    /// Returns (hasStopHook, hasPromptSubmitHook)
+    private func hasClaudeHooks(in settings: [String: Any]) -> (Bool, Bool) {
+        guard let hooks = settings["hooks"] as? [String: Any] else {
+            return (false, false)
         }
 
-        // Look for our specific hook command
-        for hookEntry in stopHooks {
-            if let innerHooks = hookEntry["hooks"] as? [[String: Any]] {
-                for hook in innerHooks {
-                    if let command = hook["command"] as? String,
-                       command.contains("133;A") {
-                        return true
+        var hasStop = false
+        var hasPromptSubmit = false
+
+        // Check Stop hooks for 133;A
+        if let stopHooks = hooks["Stop"] as? [[String: Any]] {
+            for hookEntry in stopHooks {
+                if let innerHooks = hookEntry["hooks"] as? [[String: Any]] {
+                    for hook in innerHooks {
+                        if let command = hook["command"] as? String,
+                           command.contains("133;A") {
+                            hasStop = true
+                            break
+                        }
                     }
                 }
             }
         }
-        return false
+
+        // Check UserPromptSubmit hooks for 133;B
+        if let promptSubmitHooks = hooks["UserPromptSubmit"] as? [[String: Any]] {
+            for hookEntry in promptSubmitHooks {
+                if let innerHooks = hookEntry["hooks"] as? [[String: Any]] {
+                    for hook in innerHooks {
+                        if let command = hook["command"] as? String,
+                           command.contains("133;B") {
+                            hasPromptSubmit = true
+                            break
+                        }
+                    }
+                }
+            }
+        }
+
+        return (hasStop, hasPromptSubmit)
     }
 
     /// Write Claude settings to remote server
@@ -247,12 +308,13 @@ class RtachDeployer {
         // Ensure directory exists
         _ = try await connection.executeCommand("mkdir -p ~/.claude")
 
-        // Build settings with our hook if empty
+        // Build settings with our hooks if empty
         var finalSettings = settings
         if finalSettings.isEmpty {
             finalSettings = [
                 "hooks": [
-                    "Stop": [Self.claunttyStopHook]
+                    "Stop": [Self.claunttyStopHook],
+                    "UserPromptSubmit": [Self.claunttyPromptSubmitHook]
                 ]
             ]
         }

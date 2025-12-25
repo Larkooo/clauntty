@@ -165,4 +165,38 @@ class PortScanner {
 
         return RemotePort(id: portNum, port: portNum, process: process, address: address)
     }
+
+    /// Kill the process listening on a specific port
+    /// Uses fuser or lsof to find and kill the process
+    func killProcess(onPort port: Int) async throws {
+        // Try fuser first (common on Linux), then lsof (macOS/BSD)
+        // fuser -k sends SIGKILL, we use SIGTERM for graceful shutdown
+        let command = """
+            pid=$(fuser \(port)/tcp 2>/dev/null | awk '{print $1}') && \
+            [ -n "$pid" ] && kill $pid && echo "KILLED" || \
+            (pid=$(lsof -ti tcp:\(port) 2>/dev/null | head -1) && \
+            [ -n "$pid" ] && kill $pid && echo "KILLED" || echo "NOT_FOUND")
+            """
+
+        let output = try await connection.executeCommand(command)
+        let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if trimmed == "KILLED" {
+            Logger.clauntty.info("PortScanner: killed process on port \(port)")
+        } else {
+            Logger.clauntty.warning("PortScanner: could not find process on port \(port)")
+            throw PortScannerError.processNotFound
+        }
+    }
+}
+
+enum PortScannerError: Error, LocalizedError {
+    case processNotFound
+
+    var errorDescription: String? {
+        switch self {
+        case .processNotFound:
+            return "No process found on that port"
+        }
+    }
 }

@@ -10,6 +10,7 @@ struct SessionPickerView: View {
     let onSelectPort: (RemotePort) -> Void  // Open web tab for port
     let onSwitchToTab: (Session) -> Void  // Switch to existing tab
     let onSwitchToWebTab: (WebTab) -> Void  // Switch to existing web tab
+    var onRefreshPorts: (() async -> [RemotePort])? = nil  // Refresh ports list
 
     @EnvironmentObject var sessionManager: SessionManager
     @Environment(\.dismiss) private var dismiss
@@ -17,8 +18,10 @@ struct SessionPickerView: View {
     // Alert state
     @State private var showingDeleteAlert = false
     @State private var showingRenameAlert = false
+    @State private var showingKillPortAlert = false
     @State private var sessionToDelete: RtachSession?
     @State private var sessionToRename: RtachSession?
+    @State private var portToKill: RemotePort?
     @State private var newName = ""
     @State private var isLoading = false
 
@@ -26,28 +29,27 @@ struct SessionPickerView: View {
         NavigationStack {
             List {
                 Section {
-                    Button {
+                    HStack {
+                        Image(systemName: "plus.circle.fill")
+                            .foregroundColor(.green)
+                            .font(.title2)
+
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("New Session")
+                                .font(.headline)
+                            Text("Start a fresh terminal session")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+
+                        Spacer()
+                    }
+                    .padding(.vertical, 4)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
                         onSelect(nil)
                         dismiss()
-                    } label: {
-                        HStack {
-                            Image(systemName: "plus.circle.fill")
-                                .foregroundColor(.green)
-                                .font(.title2)
-
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("New Session")
-                                    .font(.headline)
-                                Text("Start a fresh terminal session")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            }
-
-                            Spacer()
-                        }
-                        .padding(.vertical, 4)
                     }
-                    .buttonStyle(.plain)
                 }
 
                 if !sessions.isEmpty {
@@ -79,12 +81,26 @@ struct SessionPickerView: View {
                     Section("Active Ports") {
                         ForEach(ports) { port in
                             portRow(port)
+                                .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                    Button(role: .destructive) {
+                                        portToKill = port
+                                        showingKillPortAlert = true
+                                    } label: {
+                                        Label("Kill", systemImage: "xmark.circle")
+                                    }
+                                }
                         }
                     }
                 }
             }
             .navigationTitle("Select Session")
             .navigationBarTitleDisplayMode(.inline)
+            .refreshable {
+                if let refresh = onRefreshPorts {
+                    let newPorts = await refresh()
+                    ports = newPorts
+                }
+            }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") {
@@ -117,13 +133,60 @@ struct SessionPickerView: View {
         } message: { _ in
             Text("Enter a new name (letters, numbers, hyphens only)")
         }
+        .alert("Kill Process?", isPresented: $showingKillPortAlert, presenting: portToKill) { port in
+            Button("Cancel", role: .cancel) {}
+            Button("Kill", role: .destructive) {
+                killPort(port)
+            }
+        } message: { port in
+            if let process = port.process {
+                Text("Kill '\(process)' on port \(String(port.port))?")
+            } else {
+                Text("Kill process on port \(String(port.port))?")
+            }
+        }
     }
 
     @ViewBuilder
     private func sessionRow(_ session: RtachSession) -> some View {
         let isOpenInTab = sessionManager.sessionForRtach(session.id) != nil
 
-        Button {
+        HStack {
+            Image(systemName: "terminal.fill")
+                .foregroundColor(isOpenInTab ? .green : .blue)
+                .font(.title2)
+
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(session.name)
+                        .font(.headline)
+
+                    if isOpenInTab {
+                        Text("Open")
+                            .font(.caption2)
+                            .fontWeight(.medium)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.green.opacity(0.2))
+                            .foregroundColor(.green)
+                            .clipShape(Capsule())
+                    }
+                }
+
+                Text("Last active \(session.lastActiveDescription)")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
+            Spacer()
+
+            Image(systemName: isOpenInTab ? "arrow.right.circle" : "chevron.right")
+                .foregroundColor(.secondary)
+                .font(.caption)
+        }
+        .padding(.vertical, 4)
+        .contentShape(Rectangle())
+        .onTapGesture {
             if let existingSession = sessionManager.sessionForRtach(session.id) {
                 // Already open - switch to that tab
                 onSwitchToTab(existingSession)
@@ -133,43 +196,7 @@ struct SessionPickerView: View {
                 onSelect(session.id)
                 dismiss()
             }
-        } label: {
-            HStack {
-                Image(systemName: "terminal.fill")
-                    .foregroundColor(isOpenInTab ? .green : .blue)
-                    .font(.title2)
-
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 6) {
-                        Text(session.name)
-                            .font(.headline)
-
-                        if isOpenInTab {
-                            Text("Open")
-                                .font(.caption2)
-                                .fontWeight(.medium)
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .background(Color.green.opacity(0.2))
-                                .foregroundColor(.green)
-                                .clipShape(Capsule())
-                        }
-                    }
-
-                    Text("Last active \(session.lastActiveDescription)")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-
-                Spacer()
-
-                Image(systemName: isOpenInTab ? "arrow.right.circle" : "chevron.right")
-                    .foregroundColor(.secondary)
-                    .font(.caption)
-            }
-            .padding(.vertical, 4)
         }
-        .buttonStyle(.plain)
     }
 
     @ViewBuilder
@@ -177,7 +204,49 @@ struct SessionPickerView: View {
         let existingWebTab = sessionManager.webTabForPort(port.port, config: connection)
         let isOpenInTab = existingWebTab != nil
 
-        Button {
+        HStack {
+            Image(systemName: "globe")
+                .foregroundColor(isOpenInTab ? .green : .blue)
+                .font(.title2)
+
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(":\(String(port.port))")
+                        .font(.headline)
+                        .fontDesign(.monospaced)
+
+                    if let process = port.process {
+                        Text(process)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+
+                    if isOpenInTab {
+                        Text("Open")
+                            .font(.caption2)
+                            .fontWeight(.medium)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.green.opacity(0.2))
+                            .foregroundColor(.green)
+                            .clipShape(Capsule())
+                    }
+                }
+
+                Text(port.address)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
+            Spacer()
+
+            Image(systemName: isOpenInTab ? "arrow.right.circle" : "chevron.right")
+                .foregroundColor(.secondary)
+                .font(.caption)
+        }
+        .padding(.vertical, 4)
+        .contentShape(Rectangle())
+        .onTapGesture {
             if let webTab = existingWebTab {
                 // Already open - switch to that tab
                 onSwitchToWebTab(webTab)
@@ -187,50 +256,7 @@ struct SessionPickerView: View {
                 onSelectPort(port)
                 dismiss()
             }
-        } label: {
-            HStack {
-                Image(systemName: "globe")
-                    .foregroundColor(isOpenInTab ? .green : .blue)
-                    .font(.title2)
-
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 6) {
-                        Text(":\(String(port.port))")
-                            .font(.headline)
-                            .fontDesign(.monospaced)
-
-                        if let process = port.process {
-                            Text(process)
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-
-                        if isOpenInTab {
-                            Text("Open")
-                                .font(.caption2)
-                                .fontWeight(.medium)
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .background(Color.green.opacity(0.2))
-                                .foregroundColor(.green)
-                                .clipShape(Capsule())
-                        }
-                    }
-
-                    Text(port.address)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-
-                Spacer()
-
-                Image(systemName: isOpenInTab ? "arrow.right.circle" : "chevron.right")
-                    .foregroundColor(.secondary)
-                    .font(.caption)
-            }
-            .padding(.vertical, 4)
         }
-        .buttonStyle(.plain)
     }
 
     private func deleteSession(_ session: RtachSession) {
@@ -268,6 +294,31 @@ struct SessionPickerView: View {
                     if let index = sessions.firstIndex(where: { $0.id == session.id }) {
                         sessions[index].name = newName
                     }
+                    isLoading = false
+                }
+            } catch {
+                await MainActor.run {
+                    isLoading = false
+                }
+            }
+        }
+    }
+
+    private func killPort(_ port: RemotePort) {
+        guard let deployer = deployer else { return }
+
+        // Close any open web tab for this port
+        if let webTab = sessionManager.webTabForPort(port.port, config: connection) {
+            sessionManager.closeWebTab(webTab)
+        }
+
+        isLoading = true
+        Task {
+            do {
+                let scanner = PortScanner(connection: deployer.connection)
+                try await scanner.killProcess(onPort: port.port)
+                await MainActor.run {
+                    ports.removeAll { $0.port == port.port }
                     isLoading = false
                 }
             } catch {

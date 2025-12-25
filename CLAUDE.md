@@ -326,24 +326,93 @@ This installs:
 # Screenshots
 ./scripts/sim.sh screenshot myshot  # Save to screenshots/myshot.png
 
+# See all commands
+./scripts/sim.sh help
+```
+
+### Debug Commands (All-in-One)
+
+The `debug` command combines build, install, launch, screenshot, and logs into one step:
+
+```bash
+# Full debug cycle: build → install → launch → wait → screenshot → show logs
+./scripts/sim.sh debug devbox                    # Connect to 'devbox' profile
+./scripts/sim.sh debug devbox -t "ls -la"        # Type command after connecting
+./scripts/sim.sh debug devbox --wait 15          # Wait 15s before screenshot
+./scripts/sim.sh debug devbox --logs 1m          # Show last 1 minute of logs
+./scripts/sim.sh debug devbox --no-logs          # Skip log output
+
+# Quick debug (skip build, just reinstall and launch)
+./scripts/sim.sh quick devbox                    # Faster iteration
+./scripts/sim.sh q devbox -t "echo test"         # Shorthand
+```
+
+Options:
+- `--tabs "spec"` - Open multiple tabs (see Multi-Tab below)
+- `--type|-t "text"` - Type text after app launches
+- `--wait|-w N` - Wait N seconds before screenshot (default: 8)
+- `--logs|-l TIME` - Show logs from last TIME (default: 30s)
+- `--no-logs` - Don't show logs
+- `--no-build` - Skip build step (same as `quick`)
+
+### Multi-Tab Debugging
+
+Open multiple tabs for testing tab switching and rendering:
+
+```bash
+# Tab spec format: comma-separated list of:
+#   N     = rtach session index (0-based)
+#   new   = create new session
+#   :PORT = port forward (web tab)
+
+./scripts/sim.sh debug devbox --tabs "0,1"       # 2 existing sessions
+./scripts/sim.sh debug devbox --tabs "0,new"     # 1 existing + 1 new
+./scripts/sim.sh debug devbox --tabs "0,:3000"   # 1 terminal + port 3000
+
+# Show tap coordinates for tabs
+./scripts/sim.sh tabs 2                          # Coordinates for 2 tabs
+./scripts/sim.sh tabs 3                          # Coordinates for 3 tabs
+
+# Switch between tabs
+./scripts/sim.sh tap-tab 1 2                     # Tap tab 1 (of 2 total)
+./scripts/sim.sh tap-tab 2 2                     # Tap tab 2 (of 2 total)
+
+# Type in specific tabs
+./scripts/sim.sh type-tab 1 2 "hello"            # Switch to tab 1 and type
+./scripts/sim.sh run-tab 1 2 "ls -la"            # Switch to tab 1, type, press enter
+./scripts/sim.sh run-tab 2 2 "echo test"         # Run command in tab 2
+./scripts/sim.sh enter                           # Just press enter
+```
+
+### Logs
+
+```bash
+./scripts/sim.sh logs              # Stream logs (Ctrl+C to stop)
+./scripts/sim.sh logs 30s          # Show last 30 seconds
+./scripts/sim.sh logs 2m           # Show last 2 minutes
+```
+
+### UI Inspection
+
+```bash
 # Get UI element coordinates (uses IDB accessibility)
 ./scripts/sim.sh ui                 # List all UI elements with tap coordinates
 ./scripts/sim.sh ui button          # Filter to elements matching "button"
 ./scripts/sim.sh ui "Docker"        # Filter to elements matching "Docker"
-
-# Test sequences (automated UI validation)
-./scripts/sim.sh test-keyboard      # Screenshot keyboard accessory bar
-./scripts/sim.sh test-connections   # Screenshot connection list
-./scripts/sim.sh test-flow          # Full flow with multiple screenshots
 
 # Convenience taps (pre-defined UI locations)
 ./scripts/sim.sh tap-add            # Tap Add button
 ./scripts/sim.sh tap-first-connection
 ./scripts/sim.sh tap-terminal       # Focus terminal
 ./scripts/sim.sh tap-close          # Tap back/close
+```
 
-# See all commands
-./scripts/sim.sh help
+### Test Sequences
+
+```bash
+./scripts/sim.sh test-keyboard      # Screenshot keyboard accessory bar
+./scripts/sim.sh test-connections   # Screenshot connection list
+./scripts/sim.sh test-flow          # Full flow with multiple screenshots
 ```
 
 ### Preview Modes

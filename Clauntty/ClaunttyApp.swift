@@ -52,6 +52,43 @@ enum LaunchArgs {
         }
         return nil
     }
+
+    /// Tab specification for multi-tab launch
+    /// Format: "0,1,:3005" = session index 0, session index 1, port forward 3005
+    enum TabSpec: Equatable {
+        case session(Int)      // Existing rtach session by index (0-based)
+        case newSession        // Create new session (use "new" or "n")
+        case port(Int)         // Port forward (prefix with :)
+    }
+
+    /// Get tab specs from --tabs argument
+    /// Example: --tabs "0,1,:3005,new"
+    static func tabSpecs() -> [TabSpec]? {
+        let args = CommandLine.arguments
+        guard let idx = args.firstIndex(of: "--tabs"), idx + 1 < args.count else {
+            return nil
+        }
+
+        let tabsArg = args[idx + 1]
+        var specs: [TabSpec] = []
+
+        for part in tabsArg.split(separator: ",") {
+            let trimmed = part.trimmingCharacters(in: .whitespaces)
+
+            if trimmed.hasPrefix(":") {
+                // Port forward
+                if let port = Int(trimmed.dropFirst()) {
+                    specs.append(.port(port))
+                }
+            } else if trimmed == "new" || trimmed == "n" {
+                specs.append(.newSession)
+            } else if let index = Int(trimmed) {
+                specs.append(.session(index))
+            }
+        }
+
+        return specs.isEmpty ? nil : specs
+    }
 }
 
 @main
