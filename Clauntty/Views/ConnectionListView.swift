@@ -109,6 +109,12 @@ struct ConnectionListView: View {
                         guard let deployer = deployerForPicker else { return [] }
                         let scanner = PortScanner(connection: deployer.connection)
                         return (try? await scanner.listListeningPorts()) ?? []
+                    },
+                    onForwardOnly: { port in
+                        try? await sessionManager.startForwarding(port: port, config: connection)
+                    },
+                    onStopForwarding: { port in
+                        sessionManager.stopForwarding(port: port, config: connection)
                     }
                 )
             }

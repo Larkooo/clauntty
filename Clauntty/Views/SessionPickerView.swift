@@ -11,6 +11,8 @@ struct SessionPickerView: View {
     let onSwitchToTab: (Session) -> Void  // Switch to existing tab
     let onSwitchToWebTab: (WebTab) -> Void  // Switch to existing web tab
     var onRefreshPorts: (() async -> [RemotePort])? = nil  // Refresh ports list
+    var onForwardOnly: ((RemotePort) async -> Void)? = nil  // Forward without opening browser
+    var onStopForwarding: ((RemotePort) -> Void)? = nil  // Stop forwarding a port
 
     @EnvironmentObject var sessionManager: SessionManager
     @Environment(\.dismiss) private var dismiss
@@ -78,7 +80,7 @@ struct SessionPickerView: View {
                 }
 
                 if !ports.isEmpty {
-                    Section("Active Ports") {
+                    Section {
                         ForEach(ports) { port in
                             portRow(port)
                                 .swipeActions(edge: .trailing, allowsFullSwipe: false) {
@@ -89,6 +91,15 @@ struct SessionPickerView: View {
                                         Label("Kill", systemImage: "xmark.circle")
                                     }
                                 }
+                        }
+                    } header: {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Active Ports")
+                            Text("Forward ports to access remote servers locally. Enable forwarding for any ports your front-end needs (e.g., API servers).")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .fontWeight(.regular)
+                                .textCase(.none)
                         }
                     }
                 }
@@ -201,6 +212,7 @@ struct SessionPickerView: View {
 
     @ViewBuilder
     private func portRow(_ port: RemotePort) -> some View {
+        let isForwarded = sessionManager.isPortForwarded(port.port, config: connection)
         let existingWebTab = sessionManager.webTabForPort(port.port, config: connection)
         let isOpenInTab = existingWebTab != nil
 
@@ -221,6 +233,7 @@ struct SessionPickerView: View {
                             .foregroundColor(.secondary)
                     }
 
+                    // "Open" badge when has web tab
                     if isOpenInTab {
                         Text("Open")
                             .font(.caption2)
@@ -240,19 +253,38 @@ struct SessionPickerView: View {
 
             Spacer()
 
-            Image(systemName: isOpenInTab ? "arrow.right.circle" : "chevron.right")
+            // Forwarding toggle
+            Toggle("", isOn: Binding(
+                get: { isForwarded || isOpenInTab },
+                set: { newValue in
+                    if newValue {
+                        // Start forwarding
+                        Task {
+                            await onForwardOnly?(port)
+                        }
+                    } else {
+                        // Stop forwarding
+                        onStopForwarding?(port)
+                    }
+                }
+            ))
+            .labelsHidden()
+            .tint(.green)
+
+            Image(systemName: "chevron.right")
                 .foregroundColor(.secondary)
                 .font(.caption)
         }
         .padding(.vertical, 4)
         .contentShape(Rectangle())
         .onTapGesture {
+            // Tap opens browser (starts forwarding if needed)
             if let webTab = existingWebTab {
                 // Already open - switch to that tab
                 onSwitchToWebTab(webTab)
                 dismiss()
             } else {
-                // Not open - create new web tab
+                // Not open - create new web tab (will start forwarding)
                 onSelectPort(port)
                 dismiss()
             }
@@ -363,7 +395,9 @@ struct SessionPickerView: View {
         onSelect: { _ in },
         onSelectPort: { _ in },
         onSwitchToTab: { _ in },
-        onSwitchToWebTab: { _ in }
+        onSwitchToWebTab: { _ in },
+        onForwardOnly: { _ in },
+        onStopForwarding: { _ in }
     )
     .environmentObject(SessionManager())
 }

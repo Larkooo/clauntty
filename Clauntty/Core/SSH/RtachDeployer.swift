@@ -186,11 +186,60 @@ class RtachDeployer {
         Logger.clauntty.info("RtachDeployer.ensureDeployed: creating sessions directory...")
         _ = try await connection.executeCommand("mkdir -p \(Self.remoteSessionsPath)")
 
+        // Deploy helper scripts (forward-port, open-tab)
+        Logger.clauntty.info("RtachDeployer.ensureDeployed: deploying helper scripts...")
+        try await deployHelperScripts()
+
         // Deploy Claude Code hook for input detection
         Logger.clauntty.info("RtachDeployer.ensureDeployed: deploying Claude Code hook...")
         try await deployClaudeHook()
 
         Logger.clauntty.info("RtachDeployer.ensureDeployed: done")
+    }
+
+    // MARK: - Helper Scripts
+
+    /// Deploy helper scripts for port forwarding
+    private func deployHelperScripts() async throws {
+        // Deploy forward-port script (handles both "8000" and "http://localhost:8000")
+        // Output to stdout - escape sequence flows through Claude's output to terminal
+        _ = try await connection.executeCommand(
+            "cat > ~/.clauntty/bin/forward-port << 'EOF'\n" +
+            "#!/bin/bash\n" +
+            "arg=\"$1\"\n" +
+            "# Extract port from URL if needed (http://localhost:8000 -> 8000)\n" +
+            "if [[ \"$arg\" == *://* ]]; then\n" +
+            "  port=\"${arg##*:}\"\n" +
+            "  port=\"${port%%/*}\"\n" +
+            "else\n" +
+            "  port=\"$arg\"\n" +
+            "fi\n" +
+            "printf '\\e]777;forward;%s\\a' \"$port\"\n" +
+            "echo \"Port $port forwarded\"\n" +
+            "EOF\n" +
+            "chmod +x ~/.clauntty/bin/forward-port"
+        )
+
+        // Deploy open-tab script (handles both "8000" and "http://localhost:8000")
+        // Output to stdout - escape sequence flows through Claude's output to terminal
+        _ = try await connection.executeCommand(
+            "cat > ~/.clauntty/bin/open-tab << 'EOF'\n" +
+            "#!/bin/bash\n" +
+            "arg=\"$1\"\n" +
+            "# Extract port from URL if needed (http://localhost:8000 -> 8000)\n" +
+            "if [[ \"$arg\" == *://* ]]; then\n" +
+            "  port=\"${arg##*:}\"\n" +
+            "  port=\"${port%%/*}\"\n" +
+            "else\n" +
+            "  port=\"$arg\"\n" +
+            "fi\n" +
+            "printf '\\e]777;open;%s\\a' \"$port\"\n" +
+            "echo \"Opened port $port\"\n" +
+            "EOF\n" +
+            "chmod +x ~/.clauntty/bin/open-tab"
+        )
+
+        Logger.clauntty.info("Helper scripts deployed (forward-port, open-tab)")
     }
 
     // MARK: - Claude Code Hooks
@@ -215,9 +264,11 @@ class RtachDeployer {
         ]
     ]
 
-    /// Deploy Claude Code hooks for input detection (merges with existing settings)
+    /// Deploy Claude Code hooks and settings (merges with existing settings)
     /// - Stop hook: sends 133;A (prompt displayed, waiting for input)
     /// - UserPromptSubmit hook: sends 133;B (command started, processing)
+    /// - env.PATH: adds ~/.clauntty/bin to PATH for helper scripts
+    /// - permissions.allow: allows forward-port and open-tab commands
     private func deployClaudeHook() async throws {
         // Read existing settings
         let output = try await connection.executeCommand(
@@ -232,12 +283,10 @@ class RtachDeployer {
             return
         }
 
+        var needsUpdate = false
+
         // Check if our hooks already exist
         let (hasStop, hasPromptSubmit) = hasClaudeHooks(in: settings)
-        if hasStop && hasPromptSubmit {
-            Logger.clauntty.info("Claude Code hooks already configured")
-            return
-        }
 
         // Merge our hooks into settings
         var hooks = settings["hooks"] as? [String: Any] ?? [:]
@@ -246,18 +295,48 @@ class RtachDeployer {
             var stopHooks = hooks["Stop"] as? [[String: Any]] ?? []
             stopHooks.append(Self.claunttyStopHook)
             hooks["Stop"] = stopHooks
+            needsUpdate = true
         }
 
         if !hasPromptSubmit {
             var promptSubmitHooks = hooks["UserPromptSubmit"] as? [[String: Any]] ?? []
             promptSubmitHooks.append(Self.claunttyPromptSubmitHook)
             hooks["UserPromptSubmit"] = promptSubmitHooks
+            needsUpdate = true
         }
 
         settings["hooks"] = hooks
 
-        try await writeClaudeSettings(settings)
-        Logger.clauntty.info("Claude Code hooks deployed")
+        // Add PATH for helper scripts (Claude sessions only)
+        var env = settings["env"] as? [String: String] ?? [:]
+        if env["PATH"] == nil || !env["PATH"]!.contains(".clauntty/bin") {
+            env["PATH"] = "$HOME/.clauntty/bin:$PATH"
+            settings["env"] = env
+            needsUpdate = true
+        }
+
+        // Add permissions for helper scripts (use full path to avoid PATH issues)
+        var permissions = settings["permissions"] as? [String: Any] ?? [:]
+        var allow = permissions["allow"] as? [String] ?? []
+        let requiredPerms = [
+            "Bash(~/.clauntty/bin/forward-port:*)",
+            "Bash(~/.clauntty/bin/open-tab:*)"
+        ]
+        for perm in requiredPerms {
+            if !allow.contains(perm) {
+                allow.append(perm)
+                needsUpdate = true
+            }
+        }
+        permissions["allow"] = allow
+        settings["permissions"] = permissions
+
+        if needsUpdate {
+            try await writeClaudeSettings(settings)
+            Logger.clauntty.info("Claude Code settings deployed (hooks, env, permissions)")
+        } else {
+            Logger.clauntty.info("Claude Code settings already configured")
+        }
     }
 
     /// Check if our OSC 133 hooks are already present
@@ -308,13 +387,22 @@ class RtachDeployer {
         // Ensure directory exists
         _ = try await connection.executeCommand("mkdir -p ~/.claude")
 
-        // Build settings with our hooks if empty
+        // Build settings with our hooks, env, and permissions if empty
         var finalSettings = settings
         if finalSettings.isEmpty {
             finalSettings = [
                 "hooks": [
                     "Stop": [Self.claunttyStopHook],
                     "UserPromptSubmit": [Self.claunttyPromptSubmitHook]
+                ],
+                "env": [
+                    "PATH": "$HOME/.clauntty/bin:$PATH"
+                ],
+                "permissions": [
+                    "allow": [
+                        "Bash(~/.clauntty/bin/forward-port:*)",
+                        "Bash(~/.clauntty/bin/open-tab:*)"
+                    ]
                 ]
             ]
         }

@@ -118,6 +118,12 @@ class Session: ObservableObject, Identifiable {
     /// Called when old scrollback is received (to prepend to terminal)
     var onScrollbackReceived: ((Data) -> Void)?
 
+    /// Called when a port forward is requested via OSC 777
+    var onPortForwardRequested: ((Int) -> Void)?
+
+    /// Called when a web tab should be opened via OSC 777
+    var onOpenTabRequested: ((Int) -> Void)?
+
     // MARK: - Scrollback Request State
 
     /// State machine for scrollback request/response
@@ -190,10 +196,91 @@ class Session: ObservableObject, Identifiable {
         }
     }
 
+    // MARK: - Loading Indicator
+
+    /// Whether we're currently loading a large amount of data (show loading indicator)
+    @Published private(set) var isLoadingContent: Bool = false
+
+    /// Bytes received in the current sliding window
+    private var recentBytes: [(Date, Int)] = []
+
+    /// Timer to check if loading is complete
+    private var loadingCheckTimer: Timer?
+
+    /// Threshold: show loading if we receive this many bytes in the window
+    private let loadingShowThreshold = 10 * 1024  // 10KB (show quickly)
+
+    /// Window size for tracking recent bytes
+    private let loadingWindowSize: TimeInterval = 0.1  // 100ms
+
+    /// How long of low activity before hiding loading indicator
+    private let loadingHideDelay: TimeInterval = 0.3  // 300ms
+
+    /// Update loading state based on incoming data rate
+    private func updateLoadingState(bytesReceived: Int) {
+        let now = Date()
+
+        // Add this chunk to recent bytes
+        recentBytes.append((now, bytesReceived))
+
+        // Remove old entries outside the window
+        let windowStart = now.addingTimeInterval(-loadingWindowSize)
+        recentBytes.removeAll { $0.0 < windowStart }
+
+        // Calculate bytes in window
+        let bytesInWindow = recentBytes.reduce(0) { $0 + $1.1 }
+
+        // If receiving lots of data, show loading indicator
+        if bytesInWindow >= loadingShowThreshold {
+            if !isLoadingContent {
+                isLoadingContent = true
+                Logger.clauntty.info("[LOAD] Showing loading indicator (bytes in window: \(bytesInWindow))")
+            }
+
+            // Reset/restart the hide timer
+            loadingCheckTimer?.invalidate()
+            loadingCheckTimer = Timer.scheduledTimer(withTimeInterval: loadingHideDelay, repeats: false) { [weak self] _ in
+                Task { @MainActor in
+                    self?.checkLoadingComplete()
+                }
+            }
+        }
+    }
+
+    /// Check if loading is complete (called after delay)
+    private func checkLoadingComplete() {
+        let now = Date()
+        let windowStart = now.addingTimeInterval(-loadingWindowSize)
+        recentBytes.removeAll { $0.0 < windowStart }
+
+        let bytesInWindow = recentBytes.reduce(0) { $0 + $1.1 }
+
+        // If data rate is low, hide loading indicator
+        if bytesInWindow < 1024 {  // Less than 1KB in window
+            if isLoadingContent {
+                isLoadingContent = false
+                Logger.clauntty.info("[LOAD] Hiding loading indicator (bytes in window: \(bytesInWindow))")
+            }
+        } else {
+            // Still receiving data, check again later
+            loadingCheckTimer = Timer.scheduledTimer(withTimeInterval: loadingHideDelay, repeats: false) { [weak self] _ in
+                Task { @MainActor in
+                    self?.checkLoadingComplete()
+                }
+            }
+        }
+    }
+
     /// Handle normal terminal data
     private func handleNormalData(_ data: Data) {
+        // Track loading state for showing loading indicator
+        updateLoadingState(bytesReceived: data.count)
+
         // Parse OSC 133 sequences for shell integration
         parseOSC133(data)
+
+        // Parse OSC 777 sequences for Clauntty commands (port forwarding)
+        parseOSC777(data)
 
         // Reset inactivity timer - we received output
         resetInactivityTimer()
@@ -329,6 +416,81 @@ class Session: ObservableObject, Identifiable {
             }
 
             promptState = newState
+        }
+    }
+
+    // MARK: - OSC 777 Parsing (Clauntty Commands)
+
+    /// Parse OSC 777 sequences for Clauntty-specific commands
+    /// Format: ESC ] 777 ; <command> ; <args> BEL  or  ESC ] 777 ; <command> ; <args> ESC \
+    /// Commands:
+    ///   - forward;<port> - Forward a port
+    ///   - open;<port>    - Open a web tab for a port
+    private func parseOSC777(_ data: Data) {
+        let bytes = [UInt8](data)
+        let ESC: UInt8 = 0x1B
+        let BRACKET: UInt8 = 0x5D  // ]
+        let BEL: UInt8 = 0x07
+        let BACKSLASH: UInt8 = 0x5C  // \
+
+        // Look for ESC ] 7 7 7 ;
+        var i = 0
+        while i < bytes.count {
+            // Check for ESC ]
+            guard i + 5 < bytes.count,
+                  bytes[i] == ESC,
+                  bytes[i + 1] == BRACKET,
+                  bytes[i + 2] == 0x37,  // '7'
+                  bytes[i + 3] == 0x37,  // '7'
+                  bytes[i + 4] == 0x37,  // '7'
+                  bytes[i + 5] == 0x3B   // ';'
+            else {
+                i += 1
+                continue
+            }
+
+            // Find the end of the OSC sequence (BEL or ESC \)
+            var endIndex = i + 6
+            while endIndex < bytes.count {
+                if bytes[endIndex] == BEL {
+                    break
+                }
+                if bytes[endIndex] == ESC && endIndex + 1 < bytes.count && bytes[endIndex + 1] == BACKSLASH {
+                    break
+                }
+                endIndex += 1
+            }
+
+            // Extract the payload between the semicolon and terminator
+            if endIndex > i + 6 {
+                let payloadBytes = Array(bytes[(i + 6)..<endIndex])
+                if let payload = String(bytes: payloadBytes, encoding: .utf8) {
+                    handleOSC777Command(payload)
+                }
+            }
+
+            i = endIndex + 1
+        }
+    }
+
+    /// Handle a parsed OSC 777 command
+    private func handleOSC777Command(_ payload: String) {
+        let parts = payload.split(separator: ";", maxSplits: 1)
+        guard let command = parts.first else { return }
+
+        switch command {
+        case "forward":
+            if parts.count > 1, let port = Int(parts[1]) {
+                Logger.clauntty.info("Session \(self.id.uuidString.prefix(8)): OSC 777 forward port \(port)")
+                onPortForwardRequested?(port)
+            }
+        case "open":
+            if parts.count > 1, let port = Int(parts[1]) {
+                Logger.clauntty.info("Session \(self.id.uuidString.prefix(8)): OSC 777 open tab port \(port)")
+                onOpenTabRequested?(port)
+            }
+        default:
+            Logger.clauntty.debug("Session \(self.id.uuidString.prefix(8)): unknown OSC 777 command: \(command)")
         }
     }
 

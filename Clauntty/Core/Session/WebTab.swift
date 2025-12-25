@@ -46,6 +46,12 @@ class WebTab: ObservableObject, Identifiable {
     /// Whether the page is currently loading
     @Published var isLoading: Bool = false
 
+    /// Whether the web view can navigate back
+    @Published var canGoBack: Bool = false
+
+    /// Whether the web view can navigate forward
+    @Published var canGoForward: Bool = false
+
     // MARK: - Port Forwarding
 
     private var portForwarder: PortForwardingManager?

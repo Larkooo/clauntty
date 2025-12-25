@@ -15,6 +15,9 @@ class SessionManager: ObservableObject {
     /// All active web tabs
     @Published var webTabs: [WebTab] = []
 
+    /// Ports being forwarded without a web tab (background forwarding)
+    @Published var forwardedPorts: [ForwardedPort] = []
+
     /// Currently active tab type and ID
     enum ActiveTab: Equatable {
         case terminal(UUID)
@@ -180,6 +183,17 @@ class SessionManager: ObservableObject {
         Logger.clauntty.info("SessionManager: channel created for \(session.id.uuidString.prefix(8))")
 
         session.attach(channel: channel, handler: handler, connection: connection)
+
+        // Wire up OSC 777 callbacks for port forwarding
+        session.onPortForwardRequested = { [weak self, weak session] port in
+            guard let self = self, let session = session else { return }
+            self.handlePortForwardRequest(from: session, port: port)
+        }
+        session.onOpenTabRequested = { [weak self, weak session] port in
+            guard let self = self, let session = session else { return }
+            self.handleOpenTabRequest(from: session, port: port)
+        }
+
         Logger.clauntty.info("SessionManager: session \(session.id.uuidString.prefix(8)) connected and attached")
     }
 
@@ -287,7 +301,11 @@ class SessionManager: ObservableObject {
     }
 
     /// Create a web tab for a remote port
-    func createWebTab(for port: RemotePort, config: SavedConnection) async throws -> WebTab {
+    /// - Parameters:
+    ///   - port: The remote port to forward
+    ///   - config: Connection configuration
+    ///   - makeActive: Whether to switch to this tab (default true)
+    func createWebTab(for port: RemotePort, config: SavedConnection, makeActive: Bool = true) async throws -> WebTab {
         let poolKey = connectionKey(for: config)
 
         // Get or create connection
@@ -312,8 +330,10 @@ class SessionManager: ObservableObject {
         // Start port forwarding
         try await webTab.startForwarding()
 
-        // Make it active
-        activeTab = .web(webTab.id)
+        // Make it active if requested
+        if makeActive {
+            activeTab = .web(webTab.id)
+        }
 
         Logger.clauntty.info("SessionManager: created web tab for port \(port.port)")
         return webTab
@@ -416,6 +436,46 @@ class SessionManager: ObservableObject {
 
     // MARK: - Tab Navigation
 
+    // MARK: - OSC 777 Port Forwarding
+
+    /// Handle a port forward request from a session (triggered by OSC 777;forward;PORT)
+    func handlePortForwardRequest(from session: Session, port: Int) {
+        let config = session.connectionConfig
+        let remotePort = RemotePort(id: port, port: port, process: nil, address: "127.0.0.1")
+
+        Task {
+            do {
+                try await startForwarding(port: remotePort, config: config)
+                Logger.clauntty.info("SessionManager: forwarded port \(port) via OSC 777")
+            } catch {
+                Logger.clauntty.error("SessionManager: failed to forward port \(port): \(error)")
+            }
+        }
+    }
+
+    /// Handle an open tab request from a session (triggered by OSC 777;open;PORT)
+    /// Opens the tab in background without switching to it
+    func handleOpenTabRequest(from session: Session, port: Int) {
+        let config = session.connectionConfig
+        let remotePort = RemotePort(id: port, port: port, process: nil, address: "127.0.0.1")
+
+        Task {
+            do {
+                // Check if already open - just log and return, don't switch
+                if webTabForPort(port, config: config) != nil {
+                    Logger.clauntty.info("SessionManager: web tab for port \(port) already exists")
+                    return
+                }
+
+                // Create new web tab in background (don't switch to it)
+                _ = try await createWebTab(for: remotePort, config: config, makeActive: false)
+                Logger.clauntty.info("SessionManager: opened web tab for port \(port) via OSC 777 (background)")
+            } catch {
+                Logger.clauntty.error("SessionManager: failed to open tab for port \(port): \(error)")
+            }
+        }
+    }
+
     /// Switch to the previous tab (for "go back" gesture)
     func switchToPreviousTab() {
         guard let previous = previousActiveTab else {
@@ -466,6 +526,164 @@ class SessionManager: ObservableObject {
             return .terminal(nextSession.id)
         }
         return nil
+    }
+
+    // MARK: - Background Port Forwarding
+
+    /// Start forwarding a port without opening a web tab
+    func startForwarding(port: RemotePort, config: SavedConnection) async throws {
+        let poolKey = connectionKey(for: config)
+
+        // Check if already forwarded
+        if isPortForwarded(port.port, config: config) {
+            Logger.clauntty.info("SessionManager: port \(port.port) already forwarded")
+            return
+        }
+
+        // Get or create connection
+        let connection: SSHConnection
+        if let existing = connectionPool[poolKey], existing.isConnected {
+            connection = existing
+        } else {
+            connection = SSHConnection(
+                host: config.host,
+                port: config.port,
+                username: config.username,
+                authMethod: config.authMethod,
+                connectionId: config.id
+            )
+            try await connection.connect()
+            connectionPool[poolKey] = connection
+        }
+
+        // Create forwarded port
+        let forwardedPort = ForwardedPort(
+            remotePort: port,
+            connectionConfig: config,
+            sshConnection: connection
+        )
+
+        // Start forwarding
+        try await forwardedPort.startForwarding()
+
+        forwardedPorts.append(forwardedPort)
+        Logger.clauntty.info("SessionManager: started forwarding port \(port.port) -> localhost:\(forwardedPort.localPort)")
+    }
+
+    /// Stop forwarding a port
+    func stopForwarding(port: RemotePort, config: SavedConnection) {
+        let poolKey = connectionKey(for: config)
+
+        // Find and remove the forwarded port
+        if let index = forwardedPorts.firstIndex(where: {
+            $0.remotePort.port == port.port &&
+            connectionKey(for: $0.connectionConfig) == poolKey
+        }) {
+            let forwarded = forwardedPorts.remove(at: index)
+            Task {
+                await forwarded.stopForwarding()
+            }
+            Logger.clauntty.info("SessionManager: stopped forwarding port \(port.port)")
+        }
+
+        // Also close any web tab using this port
+        if let webTab = webTabForPort(port.port, config: config) {
+            closeWebTab(webTab)
+        }
+
+        cleanupUnusedConnections()
+    }
+
+    /// Check if a port is being forwarded (either background or via web tab)
+    func isPortForwarded(_ port: Int, config: SavedConnection) -> Bool {
+        let poolKey = connectionKey(for: config)
+
+        // Check background forwarded ports
+        let isBackgroundForwarded = forwardedPorts.contains {
+            $0.remotePort.port == port &&
+            connectionKey(for: $0.connectionConfig) == poolKey
+        }
+
+        // Check web tabs (which also have port forwarding)
+        let hasWebTab = webTabForPort(port, config: config) != nil
+
+        return isBackgroundForwarded || hasWebTab
+    }
+
+    /// Get a forwarded port by port number and config
+    func forwardedPort(_ port: Int, config: SavedConnection) -> ForwardedPort? {
+        let poolKey = connectionKey(for: config)
+        return forwardedPorts.first {
+            $0.remotePort.port == port &&
+            connectionKey(for: $0.connectionConfig) == poolKey
+        }
+    }
+}
+
+// MARK: - ForwardedPort
+
+/// A port being forwarded in the background (without a web tab)
+@MainActor
+class ForwardedPort: Identifiable, ObservableObject {
+    let id: UUID
+    let remotePort: RemotePort
+    @Published var localPort: Int
+    let connectionConfig: SavedConnection
+
+    private var portForwarder: PortForwardingManager?
+    weak var sshConnection: SSHConnection?
+
+    init(remotePort: RemotePort, connectionConfig: SavedConnection, sshConnection: SSHConnection) {
+        self.id = UUID()
+        self.remotePort = remotePort
+        self.localPort = remotePort.port
+        self.connectionConfig = connectionConfig
+        self.sshConnection = sshConnection
+    }
+
+    /// Start port forwarding
+    func startForwarding() async throws {
+        guard let connection = sshConnection,
+              let eventLoop = connection.nioEventLoopGroup,
+              let channel = connection.nioChannel else {
+            throw ForwardedPortError.noConnection
+        }
+
+        Logger.clauntty.info("ForwardedPort: starting forwarding for port \(self.remotePort.port)")
+
+        let forwarder = PortForwardingManager(
+            localPort: remotePort.port,
+            remoteHost: "127.0.0.1",
+            remotePort: remotePort.port,
+            eventLoopGroup: eventLoop,
+            sshChannel: channel
+        )
+
+        let actualPort = try await forwarder.start()
+        self.localPort = actualPort
+        self.portForwarder = forwarder
+
+        Logger.clauntty.info("ForwardedPort: forwarding started on localhost:\(actualPort)")
+    }
+
+    /// Stop port forwarding
+    func stopForwarding() async {
+        if let forwarder = portForwarder {
+            try? await forwarder.stop()
+            portForwarder = nil
+            Logger.clauntty.info("ForwardedPort: stopped forwarding for port \(self.remotePort.port)")
+        }
+    }
+}
+
+enum ForwardedPortError: Error, LocalizedError {
+    case noConnection
+
+    var errorDescription: String? {
+        switch self {
+        case .noConnection:
+            return "SSH connection not available"
+        }
     }
 }
 

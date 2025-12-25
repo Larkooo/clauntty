@@ -88,6 +88,30 @@ struct TerminalView: View {
                     }
                 }
 
+                // Show loading indicator when receiving large data burst
+                if session.isLoadingContent && session.state == .connected {
+                    VStack {
+                        Spacer()
+                        HStack {
+                            Spacer()
+                            HStack(spacing: 8) {
+                                ProgressView()
+                                    .tint(.white)
+                                Text("Loading...")
+                                    .foregroundColor(.white)
+                                    .font(.caption)
+                            }
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(Color.black.opacity(0.7))
+                            .cornerRadius(8)
+                            .padding()
+                        }
+                    }
+                    .transition(.opacity)
+                    .animation(.easeInOut(duration: 0.2), value: session.isLoadingContent)
+                }
+
                 // Show error overlay
                 if case .error(let errorMessage) = session.state {
                     Color.black.opacity(0.9)
