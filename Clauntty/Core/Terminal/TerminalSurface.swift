@@ -38,6 +38,9 @@ enum FontSizePreference {
 struct TerminalSurface: UIViewRepresentable {
     @ObservedObject var ghosttyApp: GhosttyApp
 
+    /// Edge gestures to coordinate with (for require-to-fail dependencies)
+    var edgeGestureCoordinator: EdgeGestureCoordinator?
+
     /// Whether this terminal is currently the active tab
     var isActive: Bool = true
 
@@ -59,6 +62,7 @@ struct TerminalSurface: UIViewRepresentable {
         let view = TerminalSurfaceView(frame: .zero, app: app)
         view.onTextInput = onTextInput
         view.onTerminalSizeChanged = onTerminalSizeChanged
+        view.edgeGestureCoordinator = edgeGestureCoordinator
         view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
 
         // Store in coordinator so we can call onSurfaceReady in updateUIView
@@ -160,6 +164,21 @@ class TerminalSurfaceView: UIView, ObservableObject, UIKeyInput, UITextInputTrai
 
     /// Subscription to power mode changes
     private var powerModeObserver: AnyCancellable?
+
+    // MARK: - Edge Gesture Coordination
+
+    /// Coordinator for edge gesture dependencies
+    weak var edgeGestureCoordinator: EdgeGestureCoordinator? {
+        didSet {
+            setupEdgeGestureDependencies()
+        }
+    }
+
+    /// Store reference to long press gesture for dependency setup
+    private var longPressGesture: UILongPressGestureRecognizer?
+
+    /// Subscription to edge gesture changes
+    private var edgeGestureSubscription: AnyCancellable?
 
     // MARK: - UITextInputTraits
 
@@ -402,6 +421,7 @@ class TerminalSurfaceView: UIView, ObservableObject, UIKeyInput, UITextInputTrai
     deinit {
         NotificationCenter.default.removeObserver(self)
         powerModeObserver?.cancel()
+        edgeGestureSubscription?.cancel()
 
         // Remove accessory bar from window
         accessoryBar.removeFromSuperview()
@@ -584,6 +604,7 @@ class TerminalSurfaceView: UIView, ObservableObject, UIKeyInput, UITextInputTrai
         let longPressGesture = UILongPressGestureRecognizer(target: self, action: #selector(handleLongPress(_:)))
         longPressGesture.minimumPressDuration = 0.3
         addGestureRecognizer(longPressGesture)
+        self.longPressGesture = longPressGesture  // Store reference for edge gesture dependencies
 
         // Allow scroll and long press to work together
         scrollGesture.require(toFail: longPressGesture)
@@ -656,6 +677,45 @@ class TerminalSurfaceView: UIView, ObservableObject, UIKeyInput, UITextInputTrai
         let ghosttyMode = ghostty_power_mode_e(rawValue: UInt32(mode.rawValue))
         ghostty_surface_set_power_mode(surface, ghosttyMode)
         Logger.clauntty.info("Terminal power mode updated: \(String(describing: mode))")
+    }
+
+    // MARK: - Edge Gesture Coordination
+
+    /// Set up require-to-fail dependencies between terminal gestures and edge gestures
+    private func setupEdgeGestureDependencies() {
+        // Cancel existing subscription
+        edgeGestureSubscription?.cancel()
+
+        guard let coordinator = edgeGestureCoordinator else { return }
+
+        // Subscribe to edge gesture changes
+        edgeGestureSubscription = Publishers.CombineLatest(
+            coordinator.$leftEdgeGesture,
+            coordinator.$rightEdgeGesture
+        )
+        .receive(on: DispatchQueue.main)
+        .sink { [weak self] leftGesture, rightGesture in
+            self?.updateEdgeGestureDependencies(left: leftGesture, right: rightGesture)
+        }
+    }
+
+    /// Update gesture dependencies when edge gestures change
+    private func updateEdgeGestureDependencies(
+        left: UIScreenEdgePanGestureRecognizer?,
+        right: UIScreenEdgePanGestureRecognizer?
+    ) {
+        guard let longPress = self.longPressGesture else { return }
+
+        // Long press should wait for edge gestures to fail
+        // This ensures edge swipes take priority over text selection
+        if let leftEdge = left {
+            longPress.require(toFail: leftEdge)
+        }
+        if let rightEdge = right {
+            longPress.require(toFail: rightEdge)
+        }
+
+        Logger.clauntty.debugOnly("Edge gesture dependencies configured: left=\(left != nil), right=\(right != nil)")
     }
 
     // MARK: - Pinch to Zoom (Font Resize)
@@ -1713,6 +1773,24 @@ class TerminalSurfaceView: UIView, ObservableObject, UIKeyInput, UITextInputTrai
         Logger.clauntty.debugOnly("captureVisibleText: captured \(result.count) chars, lines=\(result.components(separatedBy: "\n").count)")
 
         return result
+    }
+
+    /// Capture a screenshot of the terminal surface.
+    /// Used for tab selector preview when switching tabs.
+    /// - Returns: A UIImage of the current terminal content, or nil if capture failed
+    func captureScreenshot() -> UIImage? {
+        guard bounds.width > 0, bounds.height > 0 else {
+            Logger.clauntty.debugOnly("captureScreenshot: invalid bounds")
+            return nil
+        }
+
+        let renderer = UIGraphicsImageRenderer(bounds: bounds)
+        let image = renderer.image { ctx in
+            layer.render(in: ctx.cgContext)
+        }
+
+        Logger.clauntty.debugOnly("captureScreenshot: captured \(Int(image.size.width))x\(Int(image.size.height)) image")
+        return image
     }
 
     // MARK: - UIKeyInput

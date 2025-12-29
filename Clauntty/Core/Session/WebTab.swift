@@ -1,5 +1,7 @@
 import Foundation
 import os.log
+import UIKit
+import WebKit
 
 /// Represents a web tab that displays a forwarded port via WKWebView
 @MainActor
@@ -34,6 +36,9 @@ class WebTab: ObservableObject, Identifiable {
 
     @Published var state: State = .connecting
 
+    /// Cached screenshot for tab selector (captured when switching away)
+    var cachedScreenshot: UIImage?
+
     /// The actual local port (may differ from requested if using port 0)
     @Published private(set) var localPort: Int
 
@@ -51,6 +56,50 @@ class WebTab: ObservableObject, Identifiable {
 
     /// Whether the web view can navigate forward
     @Published var canGoForward: Bool = false
+
+    /// Reference to the WKWebView for navigation control
+    weak var webView: WKWebView?
+
+    // MARK: - Navigation
+
+    /// Navigate back in history
+    func goBack() {
+        webView?.goBack()
+    }
+
+    /// Navigate forward in history
+    func goForward() {
+        webView?.goForward()
+    }
+
+    /// Reload the current page
+    func reload() {
+        webView?.reload()
+    }
+
+    /// Navigate to a path (relative to localhost:port)
+    func navigate(to path: String) {
+        guard let webView = webView else { return }
+
+        var finalPath = path.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // Ensure path starts with /
+        if !finalPath.hasPrefix("/") && !finalPath.hasPrefix(":") {
+            finalPath = "/" + finalPath
+        }
+
+        // If path starts with : it's port:path format
+        let urlString: String
+        if finalPath.hasPrefix(":") {
+            urlString = "http://localhost\(finalPath)"
+        } else {
+            urlString = "http://localhost:\(localPort)\(finalPath)"
+        }
+
+        guard let url = URL(string: urlString) else { return }
+        let request = URLRequest(url: url)
+        webView.load(request)
+    }
 
     // MARK: - Port Forwarding
 
@@ -70,6 +119,19 @@ class WebTab: ObservableObject, Identifiable {
             return ":\(remotePort.port) - \(process)"
         }
         return ":\(remotePort.port)"
+    }
+
+    /// URL string for display in expanded tab bar (port + path)
+    var urlDisplayString: String {
+        if let url = currentURL {
+            var path = url.path
+            if let query = url.query {
+                path += "?\(query)"
+            }
+            if path.isEmpty { path = "/" }
+            return ":\(localPort)\(path)"
+        }
+        return ":\(localPort)/"
     }
 
     /// Local URL for WebView to load

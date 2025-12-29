@@ -5,8 +5,10 @@ struct ContentView: View {
     @EnvironmentObject var connectionStore: ConnectionStore
     @EnvironmentObject var appState: AppState
     @EnvironmentObject var sessionManager: SessionManager
+    @EnvironmentObject var edgeGestureCoordinator: EdgeGestureCoordinator
 
     @State private var showingNewTabSheet = false
+    @State private var showingFullTabSelector = false
     @State private var hasCheckedAutoConnect = false
 
     /// Edge swipe detection threshold (distance from edge to start gesture)
@@ -34,85 +36,96 @@ struct ContentView: View {
         NavigationStack {
             if sessionManager.hasSessions {
                 // Show tabs + content when there are active sessions or web tabs
-                VStack(spacing: 0) {
-                    SessionTabBar(onNewTab: {
-                        showingNewTabSheet = true
-                    })
+                // Tab bar overlays terminal content with transparent background
+                GeometryReader { geometry in
+                    ZStack(alignment: .top) {
+                        // Terminal tabs (full screen, with top padding for tab bar)
+                        ForEach(sessionManager.sessions) { session in
+                            TerminalView(session: session)
+                                .safeAreaInset(edge: .top) {
+                                    Color.clear.frame(height: 48) // Tab bar height
+                                }
+                                .offset(x: offsetForTab(.terminal(session.id), screenWidth: geometry.size.width))
+                                .opacity(opacityForTab(.terminal(session.id)))
+                                .allowsHitTesting(sessionManager.activeTab == .terminal(session.id) && swipeOffset == 0)
+                        }
 
-                    // Keep ALL views alive, but only show the active one.
-                    // This preserves terminal state (font size, scrollback, etc.) across tab switches.
-                    GeometryReader { geometry in
-                        ZStack {
-                            // Terminal tabs
-                            ForEach(sessionManager.sessions) { session in
-                                TerminalView(session: session)
-                                    .offset(x: offsetForTab(.terminal(session.id), screenWidth: geometry.size.width))
-                                    .opacity(opacityForTab(.terminal(session.id)))
-                                    .allowsHitTesting(sessionManager.activeTab == .terminal(session.id) && swipeOffset == 0)
-                            }
+                        // Web tabs (full screen, with top padding for tab bar)
+                        ForEach(sessionManager.webTabs) { webTab in
+                            WebTabView(webTab: webTab)
+                                .safeAreaInset(edge: .top) {
+                                    Color.clear.frame(height: 48) // Tab bar height
+                                }
+                                .offset(x: offsetForTab(.web(webTab.id), screenWidth: geometry.size.width))
+                                .opacity(opacityForTab(.web(webTab.id)))
+                                .allowsHitTesting(sessionManager.activeTab == .web(webTab.id) && swipeOffset == 0)
+                        }
 
-                            // Web tabs
-                            ForEach(sessionManager.webTabs) { webTab in
-                                WebTabView(webTab: webTab)
-                                    .offset(x: offsetForTab(.web(webTab.id), screenWidth: geometry.size.width))
-                                    .opacity(opacityForTab(.web(webTab.id)))
-                                    .allowsHitTesting(sessionManager.activeTab == .web(webTab.id) && swipeOffset == 0)
-                            }
+                        // Tab bar overlay at top
+                        VStack(spacing: 0) {
+                            LiquidGlassTabBarRepresentable(
+                                onNewTab: { showingNewTabSheet = true },
+                                onShowTabSelector: { showingFullTabSelector = true },
+                                sessionStatesHash: sessionManager.sessionStateVersion
+                            )
+                            .frame(height: 48)
+                            Spacer()
+                        }
 
-                            // Edge swipe gesture overlay
-                            EdgeSwipeGestureView(
-                                screenWidth: geometry.size.width,
-                                edgeThreshold: edgeThreshold,
-                                swipeThreshold: swipeThreshold,
-                                onDragStart: { isLeftEdge in
-                                    isSwipingFromLeftEdge = isLeftEdge
-                                    swipeSourceTab = sessionManager.activeTab
-                                    // Determine target tab
-                                    if isLeftEdge {
-                                        swipeTargetTab = sessionManager.previousActiveTab
-                                    } else {
-                                        swipeTargetTab = sessionManager.nextWaitingTab()
+                        // Edge swipe gesture overlay
+                        EdgeSwipeGestureView(
+                            screenWidth: geometry.size.width,
+                            edgeThreshold: edgeThreshold,
+                            swipeThreshold: swipeThreshold,
+                            edgeGestureCoordinator: edgeGestureCoordinator,
+                            onDragStart: { isLeftEdge in
+                                isSwipingFromLeftEdge = isLeftEdge
+                                swipeSourceTab = sessionManager.activeTab
+                                // Determine target tab
+                                if isLeftEdge {
+                                    swipeTargetTab = sessionManager.previousActiveTab
+                                } else {
+                                    swipeTargetTab = sessionManager.nextWaitingTab()
+                                }
+                            },
+                            onDragProgress: { offset in
+                                swipeOffset = offset
+                            },
+                            onDragEnd: { completed in
+                                let screenWidth = geometry.size.width
+                                if completed && swipeTargetTab != nil {
+                                    isCompletingSwipe = true
+                                    triggerHaptic()
+                                    // Animate to full screen width first
+                                    let targetOffset = isSwipingFromLeftEdge ? screenWidth : -screenWidth
+                                    withAnimation(.easeOut(duration: 0.2)) {
+                                        swipeOffset = targetOffset
                                     }
-                                },
-                                onDragProgress: { offset in
-                                    swipeOffset = offset
-                                },
-                                onDragEnd: { completed in
-                                    let screenWidth = geometry.size.width
-                                    if completed && swipeTargetTab != nil {
-                                        isCompletingSwipe = true
-                                        triggerHaptic()
-                                        // Animate to full screen width first
-                                        let targetOffset = isSwipingFromLeftEdge ? screenWidth : -screenWidth
-                                        withAnimation(.easeOut(duration: 0.2)) {
-                                            swipeOffset = targetOffset
+                                    // Then switch tabs and reset
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                                        if isSwipingFromLeftEdge {
+                                            sessionManager.switchToPreviousTab()
+                                        } else {
+                                            sessionManager.switchToNextWaitingTab()
                                         }
-                                        // Then switch tabs and reset
-                                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                                            if isSwipingFromLeftEdge {
-                                                sessionManager.switchToPreviousTab()
-                                            } else {
-                                                sessionManager.switchToNextWaitingTab()
-                                            }
-                                            // Reset without animation since views are now in correct position
-                                            swipeOffset = 0
-                                            swipeSourceTab = nil
-                                            swipeTargetTab = nil
-                                            isCompletingSwipe = false
-                                        }
-                                    } else {
-                                        // Cancelled - animate back to zero
-                                        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-                                            swipeOffset = 0
-                                        }
-                                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                                            swipeSourceTab = nil
-                                            swipeTargetTab = nil
-                                        }
+                                        // Reset without animation since views are now in correct position
+                                        swipeOffset = 0
+                                        swipeSourceTab = nil
+                                        swipeTargetTab = nil
+                                        isCompletingSwipe = false
+                                    }
+                                } else {
+                                    // Cancelled - animate back to zero
+                                    withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                                        swipeOffset = 0
+                                    }
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                                        swipeSourceTab = nil
+                                        swipeTargetTab = nil
                                     }
                                 }
-                            )
-                        }
+                            }
+                        )
                     }
                 }
                 .toolbar(.hidden, for: .navigationBar)
@@ -128,6 +141,17 @@ struct ContentView: View {
                                 }
                             }
                     }
+                }
+                .fullScreenCover(isPresented: $showingFullTabSelector) {
+                    FullTabSelector(
+                        onDismiss: { showingFullTabSelector = false },
+                        onNewTab: {
+                            // Show new tab sheet after a brief delay to let the full cover dismiss
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                                showingNewTabSheet = true
+                            }
+                        }
+                    )
                 }
                 .onChange(of: sessionManager.sessions.count) { oldCount, newCount in
                     // Dismiss sheet when a new session is added
@@ -292,6 +316,7 @@ struct EdgeSwipeGestureView: UIViewRepresentable {
     let screenWidth: CGFloat
     let edgeThreshold: CGFloat
     let swipeThreshold: CGFloat
+    let edgeGestureCoordinator: EdgeGestureCoordinator
     let onDragStart: (Bool) -> Void  // Bool: isLeftEdge
     let onDragProgress: (CGFloat) -> Void  // Current offset
     let onDragEnd: (Bool) -> Void  // Bool: should complete transition
@@ -306,6 +331,15 @@ struct EdgeSwipeGestureView: UIViewRepresentable {
         view.onDragEnd = onDragEnd
         view.backgroundColor = .clear
         view.isUserInteractionEnabled = true
+
+        // Wire up gesture registration callbacks
+        view.onGesturesAttachedToWindow = { [weak edgeGestureCoordinator] left, right in
+            edgeGestureCoordinator?.registerEdgeGestures(left: left, right: right)
+        }
+        view.onGesturesRemovedFromWindow = { [weak edgeGestureCoordinator] in
+            edgeGestureCoordinator?.unregisterEdgeGestures()
+        }
+
         return view
     }
 
@@ -328,6 +362,12 @@ class EdgeSwipeUIView: UIView {
     var onDragStart: ((Bool) -> Void)?
     var onDragProgress: ((CGFloat) -> Void)?
     var onDragEnd: ((Bool) -> Void)?
+
+    /// Callback to register edge gestures with coordinator
+    var onGesturesAttachedToWindow: ((UIScreenEdgePanGestureRecognizer, UIScreenEdgePanGestureRecognizer) -> Void)?
+
+    /// Callback when gestures are removed from window
+    var onGesturesRemovedFromWindow: (() -> Void)?
 
     private var leftEdgeGesture: UIScreenEdgePanGestureRecognizer!
     private var rightEdgeGesture: UIScreenEdgePanGestureRecognizer!
@@ -371,6 +411,11 @@ class EdgeSwipeUIView: UIView {
                 removeGestureRecognizer(right)
                 window.addGestureRecognizer(right)
             }
+
+            // Notify coordinator that gestures are ready
+            if let left = leftEdgeGesture, let right = rightEdgeGesture {
+                onGesturesAttachedToWindow?(left, right)
+            }
         }
     }
 
@@ -383,6 +428,8 @@ class EdgeSwipeUIView: UIView {
             if let right = rightEdgeGesture {
                 oldWindow.removeGestureRecognizer(right)
             }
+            // Notify coordinator that gestures are removed
+            onGesturesRemovedFromWindow?()
         }
         super.willMove(toWindow: newWindow)
     }
@@ -423,4 +470,5 @@ class EdgeSwipeUIView: UIView {
         .environmentObject(ConnectionStore())
         .environmentObject(AppState())
         .environmentObject(SessionManager())
+        .environmentObject(EdgeGestureCoordinator())
 }

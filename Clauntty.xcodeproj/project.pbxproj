@@ -8,8 +8,13 @@
 
 /* Begin PBXBuildFile section */
 		1855E705517197F275A5035F /* GhosttyBridgeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A94312DEE2648E8104E3AE53 /* GhosttyBridgeTests.swift */; };
+		3724FFC93CE9D8BA0D6DFB91 /* ExpandedTabOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5D16BFB6D734694C50CB3994 /* ExpandedTabOverlay.swift */; };
+		3FA137DDC10174738807DD87 /* LiquidGlassTabBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90C4942FCDCE7BA2887C829A /* LiquidGlassTabBar.swift */; };
+		570C2F179E1D3237D5566647 /* TabBubble.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6DDF3950FD48E767BF27175 /* TabBubble.swift */; };
+		5CFBC3AB3FF229C0487BDFF3 /* LiquidGlassTabBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64534A2A1F7BA41BD1A0FDD2 /* LiquidGlassTabBar.swift */; };
 		70A49F4997645686B962E0D2 /* SelectionHandleView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 297EA9CE961BFF920036934A /* SelectionHandleView.swift */; };
 		733936A7CBE2B60407C98651 /* WebTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA0CB3F10DB4D7B7DAD14D9E /* WebTab.swift */; };
+		7589708872B525259A53B93A /* FullTabSelector.swift in Sources */ = {isa = PBXBuildFile; fileRef = D8A96822FA53263CC2616ABB /* FullTabSelector.swift */; };
 		7BFB27A8AEC758530B629ADA /* SSHConnectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 023CB6A418E69A8A30B29261 /* SSHConnectionTests.swift */; };
 		7FFBEF967315C68C68D6248E /* WebTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28503FD938162D88F8B6A69F /* WebTabView.swift */; };
 		80724EA1EC07D3EC2C46051C /* SessionPickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59A3663E616FC97D48E5888C /* SessionPickerView.swift */; };
@@ -19,6 +24,8 @@
 		8D50D6A34930F5200F1440E2 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7856CABCC7D9170DD7EF307F /* Foundation.framework */; };
 		8E8B63B583F4D2BF2E6F18FD /* PortScanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B132CCB8899C9B9D34FDA68 /* PortScanner.swift */; };
 		8EE9D92CA010B003B254D7CA /* PortForwardingManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 94FD4C0609201D6B2B27B36C /* PortForwardingManager.swift */; };
+		A4F922B717B47F85C646631A /* TabBubble.swift in Sources */ = {isa = PBXBuildFile; fileRef = 591BC6868890B159D3169B77 /* TabBubble.swift */; };
+		AF67CB2B5B01EECB87C400A4 /* LiquidGlassTabBarRepresentable.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7815491C0DD74BCA0DB5A598 /* LiquidGlassTabBarRepresentable.swift */; };
 		C0000001 /* ClaunttyApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1000001 /* ClaunttyApp.swift */; };
 		C0000002 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1000002 /* ContentView.swift */; };
 		C0000003 /* SavedConnection.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1000003 /* SavedConnection.swift */; };
@@ -45,12 +52,16 @@
 		C0000024 /* NotificationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1000024 /* NotificationManager.swift */; };
 		C0000025 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1000025 /* SettingsView.swift */; };
 		C0000026 /* PowerManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1000026 /* PowerManager.swift */; };
+		C0000027 /* EdgeGestureCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1000027 /* EdgeGestureCoordinator.swift */; };
+		C80A313220D32B0F645D406F /* LiquidGlassTabBarRepresentable.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA3DCC2DFC28098F2BC7C70 /* LiquidGlassTabBarRepresentable.swift */; };
 		D1000001 /* GhosttyAppTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2000001 /* GhosttyAppTests.swift */; };
 		D1000002 /* TerminalSurfaceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2000002 /* TerminalSurfaceTests.swift */; };
 		D1000003 /* KeyboardAccessoryViewTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2000003 /* KeyboardAccessoryViewTests.swift */; };
 		D1000004 /* SessionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2000004 /* SessionTests.swift */; };
 		D1000005 /* SessionManagerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2000005 /* SessionManagerTests.swift */; };
 		E1000001 /* SSHConnectionUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2000001 /* SSHConnectionUITests.swift */; };
+		EE2DD46DA05C44309BB94180 /* FullTabSelector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 66B1CA5D0C2290DD8C5A6A5B /* FullTabSelector.swift */; };
+		F9C5C4A2CF04EB4C6A929250 /* ExpandedTabOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 620BF993225325AE2636ED6D /* ExpandedTabOverlay.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -89,12 +100,21 @@
 		28503FD938162D88F8B6A69F /* WebTabView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WebTabView.swift; sourceTree = "<group>"; };
 		297EA9CE961BFF920036934A /* SelectionHandleView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SelectionHandleView.swift; sourceTree = "<group>"; };
 		2B132CCB8899C9B9D34FDA68 /* PortScanner.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = PortScanner.swift; sourceTree = "<group>"; };
+		591BC6868890B159D3169B77 /* TabBubble.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TabBubble.swift; sourceTree = "<group>"; };
 		59A3663E616FC97D48E5888C /* SessionPickerView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SessionPickerView.swift; sourceTree = "<group>"; };
+		5D16BFB6D734694C50CB3994 /* ExpandedTabOverlay.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ExpandedTabOverlay.swift; sourceTree = "<group>"; };
+		620BF993225325AE2636ED6D /* ExpandedTabOverlay.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ExpandedTabOverlay.swift; sourceTree = "<group>"; };
+		64534A2A1F7BA41BD1A0FDD2 /* LiquidGlassTabBar.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = LiquidGlassTabBar.swift; sourceTree = "<group>"; };
+		66B1CA5D0C2290DD8C5A6A5B /* FullTabSelector.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = FullTabSelector.swift; sourceTree = "<group>"; };
+		7815491C0DD74BCA0DB5A598 /* LiquidGlassTabBarRepresentable.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = LiquidGlassTabBarRepresentable.swift; sourceTree = "<group>"; };
 		7856CABCC7D9170DD7EF307F /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
 		82281A22E5E692A251B06D6B /* ClaunttyTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ClaunttyTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		90C4942FCDCE7BA2887C829A /* LiquidGlassTabBar.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = LiquidGlassTabBar.swift; sourceTree = "<group>"; };
 		94FD4C0609201D6B2B27B36C /* PortForwardingManager.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = PortForwardingManager.swift; sourceTree = "<group>"; };
 		A94312DEE2648E8104E3AE53 /* GhosttyBridgeTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = GhosttyBridgeTests.swift; path = ../Tests/ClaunttyTests/GhosttyBridgeTests.swift; sourceTree = "<group>"; };
+		B6DDF3950FD48E767BF27175 /* TabBubble.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TabBubble.swift; sourceTree = "<group>"; };
 		BA0CB3F10DB4D7B7DAD14D9E /* WebTab.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WebTab.swift; sourceTree = "<group>"; };
+		BCA3DCC2DFC28098F2BC7C70 /* LiquidGlassTabBarRepresentable.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = LiquidGlassTabBarRepresentable.swift; sourceTree = "<group>"; };
 		C1000000 /* Clauntty.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Clauntty.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		C1000001 /* ClaunttyApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaunttyApp.swift; sourceTree = "<group>"; };
 		C1000002 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
@@ -121,11 +141,13 @@
 		C1000024 /* NotificationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationManager.swift; sourceTree = "<group>"; };
 		C1000025 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		C1000026 /* PowerManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PowerManager.swift; sourceTree = "<group>"; };
+		C1000027 /* EdgeGestureCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EdgeGestureCoordinator.swift; sourceTree = "<group>"; };
 		D2000001 /* GhosttyAppTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = GhosttyAppTests.swift; path = ../Tests/ClaunttyTests/GhosttyAppTests.swift; sourceTree = "<group>"; };
 		D2000002 /* TerminalSurfaceTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TerminalSurfaceTests.swift; path = ../Tests/ClaunttyTests/TerminalSurfaceTests.swift; sourceTree = "<group>"; };
 		D2000003 /* KeyboardAccessoryViewTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = KeyboardAccessoryViewTests.swift; path = ../Tests/ClaunttyTests/KeyboardAccessoryViewTests.swift; sourceTree = "<group>"; };
 		D2000004 /* SessionTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = SessionTests.swift; path = ../Tests/ClaunttyTests/SessionTests.swift; sourceTree = "<group>"; };
 		D2000005 /* SessionManagerTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = SessionManagerTests.swift; path = ../Tests/ClaunttyTests/SessionManagerTests.swift; sourceTree = "<group>"; };
+		D8A96822FA53263CC2616ABB /* FullTabSelector.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = FullTabSelector.swift; sourceTree = "<group>"; };
 		E2000001 /* SSHConnectionUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SSHConnectionUITests.swift; sourceTree = "<group>"; };
 		E2000002 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		E2000003 /* ClaunttyUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ClaunttyUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -216,6 +238,7 @@
 				C3000009 /* Session */,
 				C3000030 /* Notifications */,
 				C3000031 /* Power */,
+				C1000027 /* EdgeGestureCoordinator.swift */,
 			);
 			path = Core;
 			sourceTree = "<group>";
@@ -263,6 +286,7 @@
 				28503FD938162D88F8B6A69F /* WebTabView.swift */,
 				C1000025 /* SettingsView.swift */,
 				297EA9CE961BFF920036934A /* SelectionHandleView.swift */,
+				DFCD20EE71377F3F8FBB4C5E /* LiquidGlassTabBar */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -328,6 +352,19 @@
 				C1000026 /* PowerManager.swift */,
 			);
 			path = Power;
+			sourceTree = "<group>";
+		};
+		DFCD20EE71377F3F8FBB4C5E /* LiquidGlassTabBar */ = {
+			isa = PBXGroup;
+			children = (
+				B6DDF3950FD48E767BF27175 /* TabBubble.swift */,
+				90C4942FCDCE7BA2887C829A /* LiquidGlassTabBar.swift */,
+				620BF993225325AE2636ED6D /* ExpandedTabOverlay.swift */,
+				66B1CA5D0C2290DD8C5A6A5B /* FullTabSelector.swift */,
+				BCA3DCC2DFC28098F2BC7C70 /* LiquidGlassTabBarRepresentable.swift */,
+			);
+			name = LiquidGlassTabBar;
+			path = LiquidGlassTabBar;
 			sourceTree = "<group>";
 		};
 		E3000010 /* ClaunttyUITests */ = {
@@ -515,6 +552,12 @@
 				C0000025 /* SettingsView.swift in Sources */,
 				C0000026 /* PowerManager.swift in Sources */,
 				70A49F4997645686B962E0D2 /* SelectionHandleView.swift in Sources */,
+				C0000027 /* EdgeGestureCoordinator.swift in Sources */,
+				570C2F179E1D3237D5566647 /* TabBubble.swift in Sources */,
+				3FA137DDC10174738807DD87 /* LiquidGlassTabBar.swift in Sources */,
+				F9C5C4A2CF04EB4C6A929250 /* ExpandedTabOverlay.swift in Sources */,
+				EE2DD46DA05C44309BB94180 /* FullTabSelector.swift in Sources */,
+				C80A313220D32B0F645D406F /* LiquidGlassTabBarRepresentable.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

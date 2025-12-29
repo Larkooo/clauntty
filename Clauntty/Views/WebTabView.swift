@@ -14,16 +14,7 @@ struct WebTabView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Toolbar
-            WebToolbar(
-                webTab: webTab,
-                webView: $webView,
-                onNavigate: { urlString in
-                    navigateTo(urlString)
-                }
-            )
-
-            // Content
+            // Content (toolbar removed - now in expanded tab bar)
             switch webTab.state {
             case .connecting:
                 VStack(spacing: 16) {
@@ -76,169 +67,33 @@ struct WebTabView: View {
                 dismissKeyboard()
             }
         }
-        .onChange(of: isActive) { _, newValue in
+        .onChange(of: isActive) { wasActive, nowActive in
             // Dismiss keyboard when web tab becomes active (switching from terminal)
-            if newValue {
+            if nowActive {
                 dismissKeyboard()
+            }
+            // Capture screenshot when switching away from this tab
+            if wasActive && !nowActive {
+                captureScreenshot()
             }
         }
     }
 
-    /// Navigate to a path (relative to localhost:port)
-    private func navigateTo(_ path: String) {
+    /// Capture screenshot of the web view for tab selector
+    private func captureScreenshot() {
         guard let webView = webView else { return }
 
-        var finalPath = path.trimmingCharacters(in: .whitespacesAndNewlines)
-
-        // Ensure path starts with /
-        if !finalPath.hasPrefix("/") {
-            finalPath = "/" + finalPath
+        Task {
+            let config = WKSnapshotConfiguration()
+            if let screenshot = try? await webView.takeSnapshot(configuration: config) {
+                webTab.cachedScreenshot = screenshot
+            }
         }
-
-        let urlString = "http://localhost:\(webTab.localPort)\(finalPath)"
-
-        guard let url = URL(string: urlString) else { return }
-        let request = URLRequest(url: url)
-        webView.load(request)
     }
 
     /// Dismiss keyboard
     private func dismissKeyboard() {
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-    }
-}
-
-// MARK: - Web Toolbar
-
-struct WebToolbar: View {
-    @ObservedObject var webTab: WebTab
-    @Binding var webView: WKWebView?
-    var onNavigate: (String) -> Void
-
-    /// Current path text in the address bar (just the path, not the host)
-    @State private var pathText: String = "/"
-    /// Whether the URL field is focused
-    @FocusState private var isUrlFocused: Bool
-
-    /// Whether back button should be enabled
-    private var canGoBack: Bool {
-        webTab.state == .connected && webTab.canGoBack
-    }
-
-    /// Whether forward button should be enabled
-    private var canGoForward: Bool {
-        webTab.state == .connected && webTab.canGoForward
-    }
-
-    /// Whether refresh button should be enabled
-    private var canRefresh: Bool {
-        webTab.state == .connected
-    }
-
-    var body: some View {
-        HStack(spacing: 8) {
-            // Back button - 44pt minimum touch target
-            Button {
-                webView?.goBack()
-            } label: {
-                Image(systemName: "chevron.left")
-                    .font(.system(size: 18, weight: .medium))
-                    .foregroundColor(canGoBack ? .primary : .secondary.opacity(0.4))
-            }
-            .buttonStyle(.plain)
-            .frame(width: 44, height: 44)
-            .contentShape(Rectangle())
-            .disabled(!canGoBack)
-
-            // Forward button - 44pt minimum touch target
-            Button {
-                webView?.goForward()
-            } label: {
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 18, weight: .medium))
-                    .foregroundColor(canGoForward ? .primary : .secondary.opacity(0.4))
-            }
-            .buttonStyle(.plain)
-            .frame(width: 44, height: 44)
-            .contentShape(Rectangle())
-            .disabled(!canGoForward)
-
-            // Editable URL bar with fixed localhost prefix
-            HStack(spacing: 4) {
-                if webTab.isLoading {
-                    ProgressView()
-                        .scaleEffect(0.7)
-                } else {
-                    Image(systemName: "globe")
-                        .foregroundColor(.secondary)
-                }
-
-                // Fixed port prefix (use String to avoid comma formatting)
-                Text(":\(String(webTab.localPort))")
-                    .font(.system(size: 14, design: .monospaced))
-                    .foregroundColor(.secondary)
-                    .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
-
-                // Editable path portion
-                TextField("/path", text: $pathText)
-                    .font(.system(size: 14, design: .monospaced))
-                    .foregroundColor(.primary)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .keyboardType(.URL)
-                    .focused($isUrlFocused)
-                    .lineLimit(1)
-                    .onSubmit {
-                        onNavigate(pathText)
-                    }
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(Color(.systemGray5))
-            .cornerRadius(8)
-
-            // Refresh button - 44pt minimum touch target
-            Button {
-                webView?.reload()
-            } label: {
-                Image(systemName: "arrow.clockwise")
-                    .font(.system(size: 18, weight: .medium))
-                    .foregroundColor(canRefresh ? .primary : .secondary.opacity(0.4))
-            }
-            .buttonStyle(.plain)
-            .frame(width: 44, height: 44)
-            .contentShape(Rectangle())
-            .disabled(!canRefresh)
-        }
-        .padding(.horizontal, 4)
-        .padding(.vertical, 2)
-        .background(Color(.systemGray6))
-        .onAppear {
-            updatePathText()
-        }
-        .onChange(of: webTab.currentURL) { _, _ in
-            // Update text when navigation changes (but not while editing)
-            if !isUrlFocused {
-                updatePathText()
-            }
-        }
-    }
-
-    private func updatePathText() {
-        if let url = webTab.currentURL {
-            // Extract just the path (and query string if present)
-            var path = url.path
-            if let query = url.query {
-                path += "?\(query)"
-            }
-            if let fragment = url.fragment {
-                path += "#\(fragment)"
-            }
-            pathText = path.isEmpty ? "/" : path
-        } else {
-            pathText = "/"
-        }
     }
 }
 
@@ -269,9 +124,10 @@ struct WebViewContainer: UIViewRepresentable {
         let request = URLRequest(url: url)
         webView.load(request)
 
-        // Store reference
+        // Store references
         DispatchQueue.main.async {
             self.webViewBinding = webView
+            self.webTab.webView = webView
         }
 
         return webView

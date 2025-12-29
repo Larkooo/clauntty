@@ -3,6 +3,7 @@ import NIOCore
 import NIOSSH
 import os.log
 import RtachClient
+import UIKit
 
 /// Represents a single terminal session (one tab)
 /// Each session has its own SSH channel and terminal surface
@@ -36,7 +37,27 @@ class Session: ObservableObject, Identifiable {
         }
     }
 
-    @Published var state: State = .disconnected
+    /// Callback invoked when state changes (for SessionManager to update UI)
+    var onStateChange: (() -> Void)?
+
+    @Published var state: State = .disconnected {
+        didSet {
+            onStateChange?()
+        }
+    }
+
+    /// String description of state for hashing purposes
+    var stateDescription: String {
+        switch state {
+        case .disconnected: return "disconnected"
+        case .connecting: return "connecting"
+        case .connected: return "connected"
+        case .error(let msg): return "error:\(msg)"
+        }
+    }
+
+    /// Cached screenshot for tab selector (captured when switching away)
+    var cachedScreenshot: UIImage?
 
     /// Dynamic title set by terminal escape sequences (OSC 0/1/2)
     @Published var dynamicTitle: String? {
@@ -71,6 +92,11 @@ class Session: ObservableObject, Identifiable {
             return connectionConfig.name
         }
         return "\(connectionConfig.username)@\(connectionConfig.host)"
+    }
+
+    /// Connection string like "ubuntu@devbox.example.com" for expanded tab view
+    var connectionString: String {
+        "\(connectionConfig.username)@\(connectionConfig.host)"
     }
 
     /// Whether this appears to be a Claude Code session (detected by ✳️ in title)
@@ -134,7 +160,11 @@ class Session: ObservableObject, Identifiable {
 
     /// Whether the terminal is waiting for user input
     /// Set by: rtach idle notification (framed mode) or local inactivity timer (raw mode)
-    @Published private(set) var isWaitingForInput: Bool = false
+    @Published private(set) var isWaitingForInput: Bool = false {
+        didSet {
+            onStateChange?()
+        }
+    }
 
     /// Timer for detecting inactivity after output stops (only used when rtach is not running)
     private var inactivityTimer: Timer?

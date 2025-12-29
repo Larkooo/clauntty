@@ -26,6 +26,9 @@ class SessionManager: ObservableObject {
 
     @Published var activeTab: ActiveTab?
 
+    /// Version counter incremented when session states change (for SwiftUI updates)
+    @Published var sessionStateVersion: Int = 0
+
     /// Previously active tab (for "go back" navigation)
     private(set) var previousActiveTab: ActiveTab?
 
@@ -71,6 +74,12 @@ class SessionManager: ObservableObject {
     /// Reuses existing SSH connection if available
     func createSession(for config: SavedConnection) -> Session {
         let session = Session(connectionConfig: config)
+
+        // Set up callback to increment version when state changes (triggers SwiftUI updates)
+        session.onStateChange = { [weak self] in
+            self?.sessionStateVersion += 1
+        }
+
         sessions.append(session)
 
         // Always make new session active (user just opened it)
