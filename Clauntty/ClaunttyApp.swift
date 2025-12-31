@@ -100,7 +100,6 @@ struct ClaunttyApp: App {
     @StateObject private var appState: AppState
     @StateObject private var ghosttyApp: GhosttyApp
     @StateObject private var sessionManager = SessionManager()
-    @StateObject private var edgeGestureCoordinator = EdgeGestureCoordinator()
 
     static let previewMode = PreviewMode.fromArgs()
 
@@ -134,7 +133,6 @@ struct ClaunttyApp: App {
                 .environmentObject(appState)
                 .environmentObject(ghosttyApp)
                 .environmentObject(sessionManager)
-                .environmentObject(edgeGestureCoordinator)
                 .onOpenURL { url in
                     handleURL(url)
                 }

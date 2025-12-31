@@ -22,7 +22,7 @@ class SelectionHandleView: UIView {
     var onDragEnded: (() -> Void)?
 
     /// The teardrop circle diameter
-    private let circleDiameter: CGFloat = 8
+    private let circleDiameter: CGFloat = 12
 
     /// The line width extending from circle
     private let lineWidth: CGFloat = 1.5
@@ -31,7 +31,7 @@ class SelectionHandleView: UIView {
     private let lineLength: CGFloat = 17
 
     /// Total view size to accommodate teardrop + touch target
-    private let touchTargetSize: CGFloat = 44
+    private let touchTargetSize: CGFloat = 64
 
     // MARK: - Initialization
 

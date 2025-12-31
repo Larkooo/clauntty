@@ -14,7 +14,6 @@ class TerminalSurfaceHolder: ObservableObject {
 struct TerminalView: View {
     @EnvironmentObject var ghosttyApp: GhosttyApp
     @EnvironmentObject var sessionManager: SessionManager
-    @EnvironmentObject var edgeGestureCoordinator: EdgeGestureCoordinator
 
     /// The session this terminal view is displaying
     @ObservedObject var session: Session
@@ -63,7 +62,6 @@ struct TerminalView: View {
                 // Use .id(session.id) to ensure a new surface is created for each session
                 TerminalSurface(
                     ghosttyApp: ghosttyApp,
-                    edgeGestureCoordinator: edgeGestureCoordinator,
                     isActive: isActive,
                     onTextInput: { data in
                         // Send keyboard input to SSH via session
@@ -333,6 +331,5 @@ struct TerminalView: View {
         TerminalView(session: session)
             .environmentObject(GhosttyApp())
             .environmentObject(SessionManager())
-            .environmentObject(EdgeGestureCoordinator())
     }
 }

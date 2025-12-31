@@ -268,6 +268,16 @@ class KeyboardAccessoryView: UIView {
 
     // MARK: - Layout
 
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        if window != nil {
+            // Force layout update now that we have correct safe area from window
+            updateConstraintsForSafeArea()
+            setNeedsLayout()
+            layoutIfNeeded()
+        }
+    }
+
     override func layoutSubviews() {
         super.layoutSubviews()
         updateConstraintsForSafeArea()

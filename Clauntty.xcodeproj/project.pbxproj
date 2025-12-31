@@ -51,7 +51,6 @@
 		C0000024 /* NotificationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1000024 /* NotificationManager.swift */; };
 		C0000025 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1000025 /* SettingsView.swift */; };
 		C0000026 /* PowerManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1000026 /* PowerManager.swift */; };
-		C0000027 /* EdgeGestureCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1000027 /* EdgeGestureCoordinator.swift */; };
 		C0000028 /* PortsSheetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1000028 /* PortsSheetView.swift */; };
 		C0000029 /* PersistedWebTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1000029 /* PersistedWebTab.swift */; };
 		C80A313220D32B0F645D406F /* LiquidGlassTabBarRepresentable.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA3DCC2DFC28098F2BC7C70 /* LiquidGlassTabBarRepresentable.swift */; };
@@ -142,7 +141,6 @@
 		C1000024 /* NotificationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationManager.swift; sourceTree = "<group>"; };
 		C1000025 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		C1000026 /* PowerManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PowerManager.swift; sourceTree = "<group>"; };
-		C1000027 /* EdgeGestureCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EdgeGestureCoordinator.swift; sourceTree = "<group>"; };
 		C1000028 /* PortsSheetView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PortsSheetView.swift; sourceTree = "<group>"; };
 		C1000029 /* PersistedWebTab.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistedWebTab.swift; sourceTree = "<group>"; };
 		CB2F7E3BA46CBFE04CA0A92D /* PersistedTab.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = PersistedTab.swift; sourceTree = "<group>"; };
@@ -242,7 +240,6 @@
 				C3000009 /* Session */,
 				C3000030 /* Notifications */,
 				C3000031 /* Power */,
-				C1000027 /* EdgeGestureCoordinator.swift */,
 			);
 			path = Core;
 			sourceTree = "<group>";
@@ -564,7 +561,6 @@
 				C0000028 /* PortsSheetView.swift in Sources */,
 				C0000026 /* PowerManager.swift in Sources */,
 				70A49F4997645686B962E0D2 /* SelectionHandleView.swift in Sources */,
-				C0000027 /* EdgeGestureCoordinator.swift in Sources */,
 				570C2F179E1D3237D5566647 /* TabBubble.swift in Sources */,
 				3FA137DDC10174738807DD87 /* LiquidGlassTabBar.swift in Sources */,
 				F9C5C4A2CF04EB4C6A929250 /* ExpandedTabOverlay.swift in Sources */,
