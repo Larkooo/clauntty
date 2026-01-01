@@ -142,6 +142,13 @@ class TerminalSurfaceView: UIView, ObservableObject, UIKeyInput, UITextInputTrai
 
     private(set) var surface: ghostty_surface_t?
 
+    /// Returns true if a TUI app has enabled mouse tracking (DECSET 1000/1002/1003)
+    /// When true, touch events should be forwarded to the app instead of handled locally
+    private var isMouseCaptured: Bool {
+        guard let surface = self.surface else { return false }
+        return ghostty_surface_mouse_captured(surface)
+    }
+
     // MARK: - Terminal Size
 
     /// Current terminal grid size (rows, columns)
@@ -630,6 +637,13 @@ class TerminalSurfaceView: UIView, ObservableObject, UIKeyInput, UITextInputTrai
         let pinchGesture = UIPinchGestureRecognizer(target: self, action: #selector(handlePinch(_:)))
         addGestureRecognizer(pinchGesture)
 
+        // Add two-finger tap gesture for right-click (TUI context menus)
+        let twoFingerTapGesture = UITapGestureRecognizer(target: self, action: #selector(handleTwoFingerTap(_:)))
+        twoFingerTapGesture.numberOfTouchesRequired = 2
+        addGestureRecognizer(twoFingerTapGesture)
+        // Single tap waits for two-finger tap to fail
+        tapGesture.require(toFail: twoFingerTapGesture)
+
         // Subscribe to power mode changes for battery optimization
         setupPowerModeObserver()
 
@@ -849,6 +863,23 @@ class TerminalSurfaceView: UIView, ObservableObject, UIKeyInput, UITextInputTrai
             return
         }
 
+        // If TUI app has mouse tracking enabled, send left-click to app
+        let captured = isMouseCaptured
+        Logger.clauntty.debugOnly("[MOUSE] handleTap: isMouseCaptured=\(captured), location=(\(Int(location.x)), \(Int(location.y)))")
+
+        if captured {
+            guard let surface = self.surface else { return }
+            Logger.clauntty.debugOnly("[MOUSE] sending left-click to TUI app")
+            ghostty_surface_mouse_pos(surface, Double(location.x), Double(location.y), GHOSTTY_MODS_NONE)
+            _ = ghostty_surface_mouse_button(surface, GHOSTTY_MOUSE_PRESS, GHOSTTY_MOUSE_LEFT, GHOSTTY_MODS_NONE)
+            _ = ghostty_surface_mouse_button(surface, GHOSTTY_MOUSE_RELEASE, GHOSTTY_MOUSE_LEFT, GHOSTTY_MODS_NONE)
+            // Ensure keyboard is shown for TUI input
+            if !isFirstResponder {
+                _ = becomeFirstResponder()
+            }
+            return
+        }
+
         // Become first responder to show keyboard
         if !isFirstResponder {
             _ = becomeFirstResponder()
@@ -859,6 +890,17 @@ class TerminalSurfaceView: UIView, ObservableObject, UIKeyInput, UITextInputTrai
         if hasContent {
             showEditMenu(at: location)
         }
+    }
+
+    /// Handle two-finger tap for right-click (TUI context menus)
+    @objc private func handleTwoFingerTap(_ gesture: UITapGestureRecognizer) {
+        guard let surface = self.surface else { return }
+        let location = gesture.location(in: self)
+
+        // Send right-click (for TUI context menus like lazygit)
+        ghostty_surface_mouse_pos(surface, Double(location.x), Double(location.y), GHOSTTY_MODS_NONE)
+        _ = ghostty_surface_mouse_button(surface, GHOSTTY_MOUSE_PRESS, GHOSTTY_MOUSE_RIGHT, GHOSTTY_MODS_NONE)
+        _ = ghostty_surface_mouse_button(surface, GHOSTTY_MOUSE_RELEASE, GHOSTTY_MOUSE_RIGHT, GHOSTTY_MODS_NONE)
     }
 
     /// Check if a point is near the cursor position
@@ -1261,6 +1303,52 @@ class TerminalSurfaceView: UIView, ObservableObject, UIKeyInput, UITextInputTrai
     @objc private func handleScroll(_ gesture: UIPanGestureRecognizer) {
         guard let surface = self.surface else { return }
 
+        let location = gesture.location(in: self)
+
+        // When TUI app has mouse tracking enabled, send scroll events instead of scrollback
+        let captured = isMouseCaptured
+        if gesture.state == .began {
+            Logger.clauntty.debugOnly("[MOUSE] handleScroll began: isMouseCaptured=\(captured), location=(\(Int(location.x)), \(Int(location.y)))")
+        }
+
+        if captured {
+            // Send scroll events with position (like desktop mouse wheel over a pane)
+            // This allows scrolling inactive TUI panes by position, not just the focused one
+            let translation = gesture.translation(in: self)
+
+            switch gesture.state {
+            case .began:
+                scrollAccumulator = 0
+                // Send initial position so TUI knows which pane we're over
+                ghostty_surface_mouse_pos(surface, Double(location.x), Double(location.y), GHOSTTY_MODS_NONE)
+                Logger.clauntty.debugOnly("[MOUSE] TUI scroll began at (\(Int(location.x)), \(Int(location.y)))")
+
+            case .changed:
+                // Update position as finger moves (hover simulation)
+                ghostty_surface_mouse_pos(surface, Double(location.x), Double(location.y), GHOSTTY_MODS_NONE)
+
+                // Accumulate scroll and send wheel events
+                scrollAccumulator += translation.y
+                let scrollLines = scrollAccumulator / scrollThreshold
+
+                if abs(scrollLines) >= 1 {
+                    Logger.clauntty.debugOnly("[MOUSE] TUI scroll: \(Int(scrollLines)) lines at (\(Int(location.x)), \(Int(location.y)))")
+                    ghostty_surface_mouse_scroll(surface, 0, Double(scrollLines), 0)
+                    scrollAccumulator = scrollAccumulator.truncatingRemainder(dividingBy: scrollThreshold)
+                }
+
+                gesture.setTranslation(.zero, in: self)
+
+            case .ended, .cancelled:
+                scrollAccumulator = 0
+
+            default:
+                break
+            }
+            return
+        }
+
+        // Normal scroll behavior (scrollback history)
         let translation = gesture.translation(in: self)
 
         switch gesture.state {
