@@ -85,7 +85,10 @@ class RtachDeployer {
     /// 2.6.1 - Fix: client.zig forwards iOS upgrade packet to master for compression handshake
     /// 2.6.2 - Diagnostics: signal handlers, heartbeat logging, allocation failure logging
     /// 2.6.3 - Fix: Always send SIGWINCH on resume (fixes frozen Claude Code after tab switch)
-    static let expectedVersion = "2.6.4"
+    /// 2.6.4 - Fix: Resume uses monotonic counter to flush buffered output correctly
+    /// 2.6.5 - Fix: Proxy client waits for iOS upgrade before upgrading master
+    /// 2.6.6 - Fix: Explicit proxy mode flag (avoid TTY detection mismatch)
+    static let expectedVersion = "2.6.6"
 
     /// Unique client ID for this app instance (prevents duplicate connections from same device)
     /// Generated once and stored in UserDefaults - no device info leaves the app
@@ -127,13 +130,13 @@ class RtachDeployer {
 
         // 4. Return the wrapped shell command with client ID
         let sessionPath = "\(Self.remoteSessionsPath)/\(sessionId)"
-        return "\(Self.remoteBinPath) -A -C \(Self.clientId) \(sessionPath) $SHELL"
+        return "\(Self.remoteBinPath) --proxy -A -C \(Self.clientId) \(sessionPath) $SHELL"
     }
 
     /// Get the shell command for rtach (assumes already deployed)
     func shellCommand(sessionId: String = "default") -> String {
         let sessionPath = "\(Self.remoteSessionsPath)/\(sessionId)"
-        return "\(Self.remoteBinPath) -A -C \(Self.clientId) \(sessionPath) $SHELL"
+        return "\(Self.remoteBinPath) --proxy -A -C \(Self.clientId) \(sessionPath) $SHELL"
     }
 
     /// List existing rtach sessions on the remote server
