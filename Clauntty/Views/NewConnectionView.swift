@@ -3,6 +3,7 @@ import SwiftUI
 struct NewConnectionView: View {
     @EnvironmentObject var connectionStore: ConnectionStore
     @EnvironmentObject var sshKeyStore: SSHKeyStore
+    @EnvironmentObject var appState: AppState
     @Environment(\.dismiss) private var dismiss
 
     // Form state
@@ -112,6 +113,13 @@ struct NewConnectionView: View {
             } message: {
                 Text(validationError)
             }
+        }
+        .onAppear {
+            appState.beginInputSuppression()
+            dismissTerminalInput()
+        }
+        .onDisappear {
+            appState.endInputSuppression()
         }
     }
 
@@ -238,6 +246,14 @@ struct NewConnectionView: View {
         }
 
         dismiss()
+    }
+
+    private func dismissTerminalInput() {
+        UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap { $0.windows }
+            .forEach { $0.endEditing(true) }
+        NotificationCenter.default.post(name: .hideAllAccessoryBars, object: nil)
     }
 }
 

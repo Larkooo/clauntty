@@ -10,6 +10,7 @@ class TerminalSurfaceHolder: ObservableObject {
 struct TerminalView: View {
     @EnvironmentObject var ghosttyApp: GhosttyApp
     @EnvironmentObject var sessionManager: SessionManager
+    @EnvironmentObject var appState: AppState
     @ObservedObject var themeManager = ThemeManager.shared
 
     /// The session this terminal view is displaying
@@ -32,7 +33,9 @@ struct TerminalView: View {
 
     /// Whether this terminal is currently the active tab
     private var isActive: Bool {
-        sessionManager.activeTab == .terminal(session.id) && !isTabSelectorPresented
+        sessionManager.activeTab == .terminal(session.id)
+            && !isTabSelectorPresented
+            && !appState.isInputSuppressed
     }
 
     var body: some View {
@@ -358,5 +361,6 @@ struct TerminalView: View {
         TerminalView(session: session, isTabSelectorPresented: false)
             .environmentObject(GhosttyApp())
             .environmentObject(SessionManager())
+            .environmentObject(AppState())
     }
 }

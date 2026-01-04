@@ -2,6 +2,7 @@ import SwiftUI
 
 struct SettingsView: View {
     @EnvironmentObject var ghosttyApp: GhosttyApp
+    @EnvironmentObject var appState: AppState
     @ObservedObject var themeManager = ThemeManager.shared
     @ObservedObject var notificationManager = NotificationManager.shared
     @ObservedObject var powerManager = PowerManager.shared
@@ -93,6 +94,13 @@ struct SettingsView: View {
                 }
             }
         }
+        .onAppear {
+            appState.beginInputSuppression()
+            dismissTerminalInput()
+        }
+        .onDisappear {
+            appState.endInputSuppression()
+        }
     }
 
     private func openNotificationSettings() {
@@ -100,9 +108,18 @@ struct SettingsView: View {
             UIApplication.shared.open(url)
         }
     }
+
+    private func dismissTerminalInput() {
+        UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap { $0.windows }
+            .forEach { $0.endEditing(true) }
+        NotificationCenter.default.post(name: .hideAllAccessoryBars, object: nil)
+    }
 }
 
 #Preview {
     SettingsView()
         .environmentObject(GhosttyApp())
+        .environmentObject(AppState())
 }

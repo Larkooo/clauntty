@@ -278,7 +278,21 @@ class AppState: ObservableObject {
 
     @Published var currentConnection: SavedConnection?
     @Published var connectionStatus: ConnectionStatus = .disconnected
+    @Published private var inputSuppressionCount: Int = 0
 
     /// Active SSH connection (nil when disconnected)
     var sshConnection: SSHConnection?
+
+    /// Whether terminal input (keyboard + accessory bar) should be suppressed
+    var isInputSuppressed: Bool {
+        inputSuppressionCount > 0
+    }
+
+    func beginInputSuppression() {
+        inputSuppressionCount += 1
+    }
+
+    func endInputSuppression() {
+        inputSuppressionCount = max(0, inputSuppressionCount - 1)
+    }
 }

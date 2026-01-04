@@ -5,6 +5,7 @@ import SwiftUI
 struct ServerPickerView: View {
     @EnvironmentObject var connectionStore: ConnectionStore
     @EnvironmentObject var sessionManager: SessionManager
+    @EnvironmentObject var appState: AppState
     @Environment(\.dismiss) private var dismiss
 
     /// Callback when a server is selected
@@ -56,11 +57,26 @@ struct ServerPickerView: View {
                 NewConnectionView()
             }
         }
+        .onAppear {
+            appState.beginInputSuppression()
+            dismissTerminalInput()
+        }
+        .onDisappear {
+            appState.endInputSuppression()
+        }
     }
 
     /// Get the number of sessions for a connection
     private func sessionCount(for connection: SavedConnection) -> Int {
         sessionManager.sessions.filter { $0.connectionConfig.id == connection.id }.count
+    }
+
+    private func dismissTerminalInput() {
+        UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap { $0.windows }
+            .forEach { $0.endEditing(true) }
+        NotificationCenter.default.post(name: .hideAllAccessoryBars, object: nil)
     }
 }
 
@@ -109,4 +125,5 @@ struct ServerRow: View {
     ServerPickerView(onSelectServer: { _ in })
         .environmentObject(ConnectionStore())
         .environmentObject(SessionManager())
+        .environmentObject(AppState())
 }

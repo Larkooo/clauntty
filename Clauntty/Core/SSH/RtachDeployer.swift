@@ -85,7 +85,7 @@ class RtachDeployer {
     /// 2.6.1 - Fix: client.zig forwards iOS upgrade packet to master for compression handshake
     /// 2.6.2 - Diagnostics: signal handlers, heartbeat logging, allocation failure logging
     /// 2.6.3 - Fix: Always send SIGWINCH on resume (fixes frozen Claude Code after tab switch)
-    static let expectedVersion = "2.6.3"
+    static let expectedVersion = "2.6.4"
 
     /// Unique client ID for this app instance (prevents duplicate connections from same device)
     /// Generated once and stored in UserDefaults - no device info leaves the app
@@ -260,7 +260,67 @@ class RtachDeployer {
         Logger.clauntty.debugOnly("RtachDeployer.ensureDeployed: deploying Claude Code hook...")
         try await deployClaudeHook()
 
+        // Clean up old unused binaries
+        Logger.clauntty.debugOnly("RtachDeployer.ensureDeployed: cleaning up old binaries...")
+        await cleanupOldBinaries()
+
         Logger.clauntty.debugOnly("RtachDeployer.ensureDeployed: done")
+    }
+
+    /// Clean up old rtach binaries that are no longer in use
+    /// Keeps: current version + any versions with running processes
+    private func cleanupOldBinaries() async {
+        do {
+            let platform = try await getRemotePlatform()
+
+            // Build cleanup command based on OS
+            // Linux: use /proc/{pid}/exe symlink
+            // macOS: use lsof to find binary paths
+            let findInUseCmd: String
+            if platform.os == "linux" {
+                findInUseCmd = "for pid in $(pgrep -f rtach 2>/dev/null); do readlink /proc/$pid/exe 2>/dev/null; done | sort -u"
+            } else {
+                // macOS/Darwin - use lsof
+                findInUseCmd = "lsof -c rtach 2>/dev/null | awk '/rtach-[0-9]/ {print $9}' | sort -u"
+            }
+
+            // Get list of binaries currently in use
+            let inUseOutput = try await connection.executeCommand(findInUseCmd)
+            let inUseBinaries = Set(inUseOutput.split(separator: "\n").map { String($0) })
+
+            // Get all rtach binaries in ~/.clauntty/bin/
+            let listCmd = "ls -1 ~/.clauntty/bin/rtach-* 2>/dev/null || true"
+            let allOutput = try await connection.executeCommand(listCmd)
+            let allBinaries = allOutput.split(separator: "\n").map { String($0) }
+
+            var deleted = 0
+            for binary in allBinaries {
+                let binaryPath = binary.trimmingCharacters(in: .whitespacesAndNewlines)
+
+                // Skip if current version
+                if binaryPath.hasSuffix("rtach-\(Self.expectedVersion)") {
+                    continue
+                }
+
+                // Skip if in use
+                if inUseBinaries.contains(binaryPath) {
+                    Logger.clauntty.debugOnly("Keeping \(binaryPath) (in use)")
+                    continue
+                }
+
+                // Delete unused binary
+                _ = try await connection.executeCommand("rm -f '\(binaryPath)'")
+                deleted += 1
+                Logger.clauntty.debugOnly("Deleted old binary: \(binaryPath)")
+            }
+
+            if deleted > 0 {
+                Logger.clauntty.info("Cleaned up \(deleted) old rtach binaries")
+            }
+        } catch {
+            // Non-fatal - don't break deployment if cleanup fails
+            Logger.clauntty.warning("Failed to cleanup old binaries: \(error)")
+        }
     }
 
     // MARK: - Helper Scripts

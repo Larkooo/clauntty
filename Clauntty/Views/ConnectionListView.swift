@@ -106,6 +106,13 @@ struct ConnectionListView: View {
                 }
             }
         }
+        .onAppear {
+            appState.beginInputSuppression()
+            dismissTerminalInput()
+        }
+        .onDisappear {
+            appState.endInputSuppression()
+        }
     }
 
     private var emptyStateView: some View {
@@ -138,6 +145,14 @@ struct ConnectionListView: View {
         .frame(maxWidth: .infinity)
         .padding(.vertical, 40)
         .listRowBackground(Color.clear)
+    }
+
+    private func dismissTerminalInput() {
+        UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap { $0.windows }
+            .forEach { $0.endEditing(true) }
+        NotificationCenter.default.post(name: .hideAllAccessoryBars, object: nil)
     }
 
     private func connect(to connection: SavedConnection) {
