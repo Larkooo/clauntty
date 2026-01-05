@@ -4,6 +4,12 @@ import NIOPosix
 import NIOSSH
 import os.log
 
+/// Remote platform info (OS and architecture)
+struct RemotePlatform {
+    let os: String      // "linux" or "darwin"
+    let arch: String    // "x86_64" or "aarch64"
+}
+
 /// Manages an SSH connection lifecycle
 @MainActor
 class SSHConnection: ObservableObject {
@@ -32,6 +38,9 @@ class SSHConnection: ObservableObject {
     private var channel: Channel?
     private var sshChildChannel: Channel?
     private var channelHandler: SSHChannelHandler?
+
+    /// Cached remote platform (detected once per connection)
+    private var cachedPlatform: RemotePlatform?
 
     /// Expose event loop group for port forwarding
     /// Uses the global singleton - never creates/destroys threads on reconnect
@@ -356,6 +365,50 @@ class SSHConnection: ObservableObject {
         // Wait for command to complete
         try await childChannel.closeFuture.get()
         Logger.clauntty.debugOnly("executeWithStdin: command completed successfully")
+    }
+
+    /// Get remote platform info (OS and architecture)
+    /// Result is cached for the lifetime of this connection
+    func getRemotePlatform() async throws -> RemotePlatform {
+        if let cached = cachedPlatform {
+            return cached
+        }
+
+        let output = try await executeCommand("uname -sm")
+        let parts = output.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: " ")
+        guard parts.count >= 2 else {
+            throw SSHError.internalError("Could not detect remote platform: \(output)")
+        }
+
+        let osName = String(parts[0]).lowercased()
+        let archName = String(parts[1])
+
+        // Normalize OS
+        let os: String
+        switch osName {
+        case "linux":
+            os = "linux"
+        case "darwin":
+            os = "darwin"
+        default:
+            throw SSHError.internalError("Unsupported OS: \(osName)")
+        }
+
+        // Normalize arch names
+        let arch: String
+        switch archName {
+        case "x86_64", "amd64":
+            arch = "x86_64"
+        case "aarch64", "arm64":
+            arch = "aarch64"
+        default:
+            throw SSHError.internalError("Unsupported architecture: \(archName)")
+        }
+
+        let platform = RemotePlatform(os: os, arch: arch)
+        cachedPlatform = platform
+        Logger.clauntty.debugOnly("Detected remote platform: \(os) \(arch)")
+        return platform
     }
 
     /// Send terminal window size change to SSH server

@@ -277,7 +277,7 @@ class RtachDeployer {
     /// Keeps: current version + any versions with running processes
     private func cleanupOldBinaries() async {
         do {
-            let platform = try await getRemotePlatform()
+            let platform = try await connection.getRemotePlatform()
 
             // Build cleanup command based on OS
             // Linux: use /proc/{pid}/exe symlink
@@ -603,49 +603,8 @@ class RtachDeployer {
 
     // MARK: - Private
 
-    /// Remote platform info (OS and architecture)
-    struct RemotePlatform {
-        let os: String      // "linux" or "darwin"
-        let arch: String    // "x86_64" or "aarch64"
-    }
-
-    private func getRemotePlatform() async throws -> RemotePlatform {
-        let output = try await connection.executeCommand("uname -sm")
-        let parts = output.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: " ")
-        guard parts.count >= 2 else {
-            throw RtachDeployError.unsupportedArchitecture(output)
-        }
-
-        let osName = String(parts[0]).lowercased()
-        let archName = String(parts[1])
-
-        // Normalize OS
-        let os: String
-        switch osName {
-        case "linux":
-            os = "linux"
-        case "darwin":
-            os = "darwin"
-        default:
-            throw RtachDeployError.unsupportedArchitecture("\(osName) \(archName)")
-        }
-
-        // Normalize arch names
-        let arch: String
-        switch archName {
-        case "x86_64", "amd64":
-            arch = "x86_64"
-        case "aarch64", "arm64":
-            arch = "aarch64"
-        default:
-            throw RtachDeployError.unsupportedArchitecture(archName)
-        }
-
-        return RemotePlatform(os: os, arch: arch)
-    }
-
     private func getRemoteArch() async throws -> String {
-        let platform = try await getRemotePlatform()
+        let platform = try await connection.getRemotePlatform()
         return platform.arch
     }
 
@@ -683,7 +642,7 @@ class RtachDeployer {
 
     private func deploy(arch: String) async throws {
         // Get full platform info for binary selection
-        let platform = try await getRemotePlatform()
+        let platform = try await connection.getRemotePlatform()
 
         // Get the binary from app bundle
         guard let binaryData = loadBundledBinary(for: platform) else {

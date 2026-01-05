@@ -47,25 +47,41 @@ class PortScanner {
     /// List all listening TCP ports on the remote server
     /// Returns ports sorted by priority (common dev ports first)
     func listListeningPorts() async throws -> [RemotePort] {
-        // Try ss first (modern Linux), fall back to netstat
-        let output = try await connection.executeCommand(
-            "ss -tlnp 2>/dev/null || netstat -tlnp 2>/dev/null || echo 'SCAN_FAILED'"
-        )
+        let platform = try await connection.getRemotePlatform()
 
-        if output.contains("SCAN_FAILED") {
-            Logger.clauntty.warning("PortScanner: neither ss nor netstat available")
-            return []
+        let output: String
+        let ports: [RemotePort]
+
+        if platform.os == "darwin" {
+            // macOS: use lsof
+            output = try await connection.executeCommand(
+                "lsof -iTCP -sTCP:LISTEN -P -n 2>/dev/null || echo 'SCAN_FAILED'"
+            )
+            if output.contains("SCAN_FAILED") {
+                Logger.clauntty.warning("PortScanner: lsof not available on macOS")
+                return []
+            }
+            ports = parseLsofOutput(output)
+        } else {
+            // Linux: try ss first, fall back to netstat
+            output = try await connection.executeCommand(
+                "ss -tlnp 2>/dev/null || netstat -tlnp 2>/dev/null || echo 'SCAN_FAILED'"
+            )
+            if output.contains("SCAN_FAILED") {
+                Logger.clauntty.warning("PortScanner: neither ss nor netstat available")
+                return []
+            }
+            ports = parseLinuxOutput(output)
         }
 
-        let ports = parseOutput(output)
         let sorted = ports.sorted { $0.sortPriority < $1.sortPriority || ($0.sortPriority == $1.sortPriority && $0.port < $1.port) }
 
         Logger.clauntty.debugOnly("PortScanner: found \(sorted.count) listening ports")
         return sorted
     }
 
-    /// Parse ss or netstat output
-    private func parseOutput(_ output: String) -> [RemotePort] {
+    /// Parse ss or netstat output (Linux)
+    private func parseLinuxOutput(_ output: String) -> [RemotePort] {
         var ports: [RemotePort] = []
         var seenPorts = Set<Int>()
 
@@ -83,6 +99,62 @@ class PortScanner {
                     seenPorts.insert(port.port)
                     ports.append(port)
                 }
+            }
+        }
+
+        return ports
+    }
+
+    /// Parse lsof output (macOS)
+    /// Example: "node    12345   user   23u  IPv4 0x...      0t0  TCP 127.0.0.1:3000 (LISTEN)"
+    private func parseLsofOutput(_ output: String) -> [RemotePort] {
+        var ports: [RemotePort] = []
+        var seenPorts = Set<Int>()
+
+        for line in output.split(separator: "\n") {
+            let lineStr = String(line)
+
+            // Skip header line
+            if lineStr.hasPrefix("COMMAND") {
+                continue
+            }
+
+            // Must contain LISTEN
+            guard lineStr.contains("(LISTEN)") else { continue }
+
+            // Parse the line - columns are space-separated
+            // COMMAND PID USER FD TYPE DEVICE SIZE/OFF NODE NAME
+            let components = lineStr.split(separator: " ").map { String($0) }.filter { !$0.isEmpty }
+
+            // Need at least: COMMAND PID USER FD TYPE DEVICE SIZE NODE NAME
+            guard components.count >= 9 else { continue }
+
+            let process = components[0]
+
+            // Find the NAME column (contains address:port)
+            // It's usually the last component before "(LISTEN)"
+            guard let nameIndex = components.firstIndex(where: { $0.contains(":") && !$0.hasPrefix("0x") }) else {
+                continue
+            }
+
+            let name = components[nameIndex]
+
+            // Parse address:port from NAME (e.g., "127.0.0.1:3000", "*:8080", "[::1]:3000")
+            guard let colonIndex = name.lastIndex(of: ":") else { continue }
+            let portStr = String(name[name.index(after: colonIndex)...])
+            guard let portNum = Int(portStr), portNum > 0 && portNum < 65536 else { continue }
+
+            let addrPart = String(name[..<colonIndex])
+            let address: String
+            if addrPart == "*" || addrPart == "[::]" || addrPart.isEmpty {
+                address = "0.0.0.0"
+            } else {
+                address = addrPart.replacingOccurrences(of: "[", with: "").replacingOccurrences(of: "]", with: "")
+            }
+
+            if !seenPorts.contains(portNum) {
+                seenPorts.insert(portNum)
+                ports.append(RemotePort(id: portNum, port: portNum, process: process, address: address))
             }
         }
 
@@ -167,16 +239,24 @@ class PortScanner {
     }
 
     /// Kill the process listening on a specific port
-    /// Uses fuser or lsof to find and kill the process
+    /// Uses platform-appropriate command (fuser on Linux, lsof on macOS)
     func killProcess(onPort port: Int) async throws {
-        // Try fuser first (common on Linux), then lsof (macOS/BSD)
-        // fuser -k sends SIGKILL, we use SIGTERM for graceful shutdown
-        let command = """
-            pid=$(fuser \(port)/tcp 2>/dev/null | awk '{print $1}') && \
-            [ -n "$pid" ] && kill $pid && echo "KILLED" || \
-            (pid=$(lsof -ti tcp:\(port) 2>/dev/null | head -1) && \
-            [ -n "$pid" ] && kill $pid && echo "KILLED" || echo "NOT_FOUND")
-            """
+        let platform = try await connection.getRemotePlatform()
+
+        let command: String
+        if platform.os == "darwin" {
+            // macOS: use lsof
+            command = """
+                pid=$(lsof -ti tcp:\(port) 2>/dev/null | head -1) && \
+                [ -n "$pid" ] && kill $pid && echo "KILLED" || echo "NOT_FOUND"
+                """
+        } else {
+            // Linux: use fuser (more reliable than lsof on Linux)
+            command = """
+                pid=$(fuser \(port)/tcp 2>/dev/null | awk '{print $1}') && \
+                [ -n "$pid" ] && kill $pid && echo "KILLED" || echo "NOT_FOUND"
+                """
+        }
 
         let output = try await connection.executeCommand(command)
         let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
