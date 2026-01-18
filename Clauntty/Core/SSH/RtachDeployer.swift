@@ -415,6 +415,10 @@ class RtachDeployer {
 
     /// Deploy Claude Code settings (PATH and permissions for helper scripts)
     private func deployClaudeHook() async throws {
+        // Get the actual home directory path (don't use $HOME which won't expand in settings.json)
+        let homeDir = try await connection.executeCommand("echo $HOME")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
         // Read existing settings
         let output = try await connection.executeCommand(
             "cat \(Self.claudeSettingsPath) 2>/dev/null || echo '{}'"
@@ -424,7 +428,7 @@ class RtachDeployer {
         guard let data = jsonString.data(using: .utf8),
               var settings = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             // Invalid JSON or empty, create fresh settings
-            try await writeClaudeSettings([:])
+            try await writeClaudeSettings([:], homeDir: homeDir)
             return
         }
 
@@ -432,8 +436,9 @@ class RtachDeployer {
 
         // Add PATH for helper scripts (Claude sessions only)
         // Include /usr/bin:/bin to ensure system tools like base64 are available in Claude Code snapshots
+        // Use expanded home directory path since Claude Code doesn't expand $HOME
         var env = settings["env"] as? [String: String] ?? [:]
-        let expectedPath = "/usr/bin:/bin:$HOME/.clauntty/bin:$PATH"
+        let expectedPath = "/usr/bin:/bin:\(homeDir)/.clauntty/bin"
         if env["PATH"] != expectedPath {
             env["PATH"] = expectedPath
             settings["env"] = env
@@ -458,7 +463,7 @@ class RtachDeployer {
         settings["permissions"] = permissions
 
         if needsUpdate {
-            try await writeClaudeSettings(settings)
+            try await writeClaudeSettings(settings, homeDir: homeDir)
             Logger.clauntty.debugOnly("Claude Code settings deployed (env, permissions)")
         } else {
             Logger.clauntty.debugOnly("Claude Code settings already configured")
@@ -466,7 +471,7 @@ class RtachDeployer {
     }
 
     /// Write Claude settings to remote server
-    private func writeClaudeSettings(_ settings: [String: Any]) async throws {
+    private func writeClaudeSettings(_ settings: [String: Any], homeDir: String) async throws {
         // Ensure directory exists
         _ = try await connection.executeCommand("mkdir -p ~/.claude")
 
@@ -475,7 +480,7 @@ class RtachDeployer {
         if finalSettings.isEmpty {
             finalSettings = [
                 "env": [
-                    "PATH": "/usr/bin:/bin:$HOME/.clauntty/bin:$PATH"
+                    "PATH": "/usr/bin:/bin:\(homeDir)/.clauntty/bin"
                 ],
                 "permissions": [
                     "allow": [
