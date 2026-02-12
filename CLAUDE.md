@@ -49,7 +49,7 @@ iOS SSH terminal using **libghostty** for GPU-accelerated rendering + **SwiftNIO
 
 ```bash
 # Build GhosttyKit (after ghostty changes)
-cd ../ghostty && zig build -Demit-xcframework
+cd ../ghostty && git checkout clauntty && zig build -Demit-xcframework
 
 # Build & Run (use sim.sh)
 ./scripts/sim.sh build              # Build app
