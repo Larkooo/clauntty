@@ -2,6 +2,7 @@ import Foundation
 import NIOCore
 import NIOSSH
 import Crypto
+import _CryptoExtras
 import os.log
 
 /// Handles SSH authentication (password and SSH key)
@@ -108,19 +109,36 @@ class SSHAuthenticator: NIOSSHClientUserAuthenticationDelegate {
         return try parsePrivateKey(data: privateKeyData, passphrase: keyInfo.passphrase)
     }
 
-    private func parsePrivateKey(data: Data, passphrase: String?) throws -> NIOSSHPrivateKey {
+    func parsePrivateKey(data: Data, passphrase: String?) throws -> NIOSSHPrivateKey {
         let keyString = String(data: data, encoding: .utf8) ?? ""
 
         // Detect key type from header
         if keyString.contains("BEGIN OPENSSH PRIVATE KEY") {
             return try parseOpenSSHKey(data: data, passphrase: passphrase)
         } else if keyString.contains("BEGIN RSA PRIVATE KEY") {
-            throw AuthError.unsupportedKeyFormat("PEM RSA keys not yet supported")
+            return try parsePEMRSAKey(data: data, passphrase: passphrase)
+        } else if keyString.contains("BEGIN PRIVATE KEY") {
+            // PKCS#8 PEM (often used for RSA keys)
+            return try parsePEMRSAKey(data: data, passphrase: passphrase)
         } else if keyString.contains("BEGIN EC PRIVATE KEY") {
             throw AuthError.unsupportedKeyFormat("PEM EC keys not yet supported")
         } else {
             throw AuthError.unsupportedKeyFormat("Unknown key format")
         }
+    }
+
+    private func parsePEMRSAKey(data: Data, passphrase: String?) throws -> NIOSSHPrivateKey {
+        guard passphrase == nil else {
+            throw AuthError.unsupportedKeyFormat("Encrypted PEM RSA keys not yet supported")
+        }
+
+        guard let pem = String(data: data, encoding: .utf8) else {
+            throw AuthError.invalidKeyData
+        }
+
+        // We intentionally accept legacy "BEGIN RSA PRIVATE KEY" and PKCS#8 "BEGIN PRIVATE KEY".
+        let rsaKey = try _RSA.Signing.PrivateKey(pemRepresentation: pem)
+        return NIOSSHPrivateKey(rsaKey: rsaKey)
     }
 
     private func parseOpenSSHKey(data: Data, passphrase: String?) throws -> NIOSSHPrivateKey {
@@ -269,8 +287,35 @@ class SSHAuthenticator: NIOSSHClientUserAuthenticationDelegate {
             let p521Key = try P521.Signing.PrivateKey(rawRepresentation: privateKeyBytes)
             return NIOSSHPrivateKey(p521Key: p521Key)
 
+        case "ssh-rsa":
+            // OpenSSH RSA private key format:
+            //   string "ssh-rsa"
+            //   mpint  n
+            //   mpint  e
+            //   mpint  d
+            //   mpint  iqmp
+            //   mpint  p
+            //   mpint  q
+            guard let modulus = privReader.readMPInt(),
+                  let exponent = privReader.readMPInt(),
+                  let d = privReader.readMPInt(),
+                  let _ = privReader.readMPInt(),
+                  let p = privReader.readMPInt(),
+                  let q = privReader.readMPInt() else {
+                throw AuthError.invalidKeyData
+            }
+
+            let rsaKey = try _RSA.Signing.PrivateKey(
+                n: modulus.strippingLeadingZeros(),
+                e: exponent.strippingLeadingZeros(),
+                d: d.strippingLeadingZeros(),
+                p: p.strippingLeadingZeros(),
+                q: q.strippingLeadingZeros()
+            )
+            return NIOSSHPrivateKey(rsaKey: rsaKey)
+
         default:
-            throw AuthError.unsupportedKeyFormat("Key type '\(keyType)' not supported. Use Ed25519 or ECDSA.")
+            throw AuthError.unsupportedKeyFormat("Key type '\(keyType)' not supported. Use Ed25519, ECDSA, or RSA.")
         }
     }
 
@@ -328,5 +373,17 @@ private struct OpenSSHKeyReader {
     mutating func readLengthPrefixedData() -> Data? {
         guard let length = readUInt32() else { return nil }
         return readBytes(Int(length))
+    }
+
+    mutating func readMPInt() -> Data? {
+        readLengthPrefixedData()
+    }
+}
+
+private extension Data {
+    func strippingLeadingZeros() -> Data {
+        guard !self.isEmpty else { return self }
+        let trimmed = self.drop(while: { $0 == 0 })
+        return trimmed.isEmpty ? Data([0]) : Data(trimmed)
     }
 }

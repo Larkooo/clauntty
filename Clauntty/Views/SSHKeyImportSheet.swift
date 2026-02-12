@@ -30,7 +30,7 @@ struct SSHKeyImportSheet: View {
 
                 Section {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("Paste your private key (Ed25519 or ECDSA):")
+                        Text("Paste your private key (Ed25519, ECDSA, or RSA):")
                             .font(.caption)
                             .foregroundColor(.secondary)
 
@@ -107,8 +107,12 @@ struct SSHKeyImportSheet: View {
         }
 
         // Validate key format
-        guard trimmedKey.contains("BEGIN OPENSSH PRIVATE KEY") else {
-            errorMessage = "Invalid SSH key format. OpenSSH format required (Ed25519 or ECDSA)."
+        let isOpenSSH = trimmedKey.contains("BEGIN OPENSSH PRIVATE KEY")
+        let isLegacyRSA = trimmedKey.contains("BEGIN RSA PRIVATE KEY")
+        let isPKCS8 = trimmedKey.contains("BEGIN PRIVATE KEY")
+
+        guard isOpenSSH || isLegacyRSA || isPKCS8 else {
+            errorMessage = "Invalid SSH key format. Use OpenSSH or PEM private keys."
             showingError = true
             return
         }
