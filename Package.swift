@@ -15,7 +15,7 @@ let package = Package(
     ],
     dependencies: [
         // Apple's official SSH implementation
-        .package(url: "https://github.com/apple/swift-nio-ssh.git", from: "0.9.0"),
+        .package(url: "https://github.com/Larkooo/swift-nio-ssh.git", branch: "feat/rsa-private-key-auth"),
         // Required NIO dependencies
         .package(url: "https://github.com/apple/swift-nio.git", from: "2.62.0"),
         // Local rtach client package

@@ -65,6 +65,7 @@
 		D1000003 /* KeyboardAccessoryViewTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2000003 /* KeyboardAccessoryViewTests.swift */; };
 		D1000004 /* SessionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2000004 /* SessionTests.swift */; };
 		D1000005 /* SessionManagerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2000005 /* SessionManagerTests.swift */; };
+		D1000006 /* SSHAuthenticatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2000006 /* SSHAuthenticatorTests.swift */; };
 		E1000001 /* SSHConnectionUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2000001 /* SSHConnectionUITests.swift */; };
 		EE2DD46DA05C44309BB94180 /* FullTabSelector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 66B1CA5D0C2290DD8C5A6A5B /* FullTabSelector.swift */; };
 		F9C5C4A2CF04EB4C6A929250 /* ExpandedTabOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 620BF993225325AE2636ED6D /* ExpandedTabOverlay.swift */; };
@@ -144,6 +145,7 @@
 		D2000003 /* KeyboardAccessoryViewTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = KeyboardAccessoryViewTests.swift; path = ../Tests/ClaunttyTests/KeyboardAccessoryViewTests.swift; sourceTree = "<group>"; };
 		D2000004 /* SessionTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = SessionTests.swift; path = ../Tests/ClaunttyTests/SessionTests.swift; sourceTree = "<group>"; };
 		D2000005 /* SessionManagerTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = SessionManagerTests.swift; path = ../Tests/ClaunttyTests/SessionManagerTests.swift; sourceTree = "<group>"; };
+		D2000006 /* SSHAuthenticatorTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = SSHAuthenticatorTests.swift; path = ../Tests/ClaunttyTests/SSHAuthenticatorTests.swift; sourceTree = "<group>"; };
 		E2000001 /* SSHConnectionUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SSHConnectionUITests.swift; sourceTree = "<group>"; };
 		E2000002 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		E2000003 /* ClaunttyUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ClaunttyUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -200,6 +202,7 @@
 				D2000003 /* KeyboardAccessoryViewTests.swift */,
 				D2000004 /* SessionTests.swift */,
 				D2000005 /* SessionManagerTests.swift */,
+				D2000006 /* SSHAuthenticatorTests.swift */,
 			);
 			path = ClaunttyTests;
 			sourceTree = "<group>";
@@ -543,6 +546,7 @@
 				D1000003 /* KeyboardAccessoryViewTests.swift in Sources */,
 				D1000004 /* SessionTests.swift in Sources */,
 				D1000005 /* SessionManagerTests.swift in Sources */,
+				D1000006 /* SSHAuthenticatorTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -938,10 +942,10 @@
 /* Begin XCRemoteSwiftPackageReference section */
 		C7000000 /* XCRemoteSwiftPackageReference "swift-nio-ssh" */ = {
 			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/apple/swift-nio-ssh.git";
+			repositoryURL = "https://github.com/Larkooo/swift-nio-ssh.git";
 			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 0.9.0;
+				branch = "feat/rsa-private-key-auth";
+				kind = branch;
 			};
 		};
 		C7000001 /* XCRemoteSwiftPackageReference "swift-nio" */ = {

@@ -25,7 +25,7 @@ Most mobile terminals lose your session when the app backgrounds or your connect
 - Keyboard accessory bar (Esc, Tab, Ctrl, arrows, ^C/^L/^D)
 - Text selection with long-press
 - Port forwarding with in-app browser
-- SSH key authentication (Ed25519)
+- SSH key authentication (Ed25519, ECDSA, RSA)
 
 **Open Source**
 - No accounts, no telemetry, no subscriptions
