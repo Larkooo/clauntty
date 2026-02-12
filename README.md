@@ -49,6 +49,9 @@ git clone https://github.com/eriklangille/clauntty.git clauntty
 git clone https://github.com/eriklangille/ghostty.git ghostty
 git clone https://github.com/eriklangille/rtach.git rtach
 git clone https://github.com/eriklangille/libxev.git libxev
+
+# IMPORTANT: Clauntty depends on Ghostty's clauntty branch APIs
+cd ghostty && git checkout clauntty && cd ..
 ```
 
 You should end up with:
@@ -78,7 +81,7 @@ ls clauntty/Frameworks/GhosttyKit.xcframework
 ```
 If missing, create it:
 ```bash
-ln -s ../../ghostty/zig-out/GhosttyKit.xcframework clauntty/Frameworks/GhosttyKit.xcframework
+ln -s ../../ghostty/macos/GhosttyKit.xcframework clauntty/Frameworks/GhosttyKit.xcframework
 ```
 
 ### 3. Build the iOS app
