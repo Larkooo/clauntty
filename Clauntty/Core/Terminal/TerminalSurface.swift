@@ -1530,6 +1530,12 @@ class TerminalSurfaceView: UIView, ObservableObject, UIKeyInput, UITextInputTrai
         // Store reference first
         ghosttySublayer = sublayer
 
+        // Set an initial frame immediately so the IOSurface layer isn't left at 0x0.
+        let initialAccessoryBarReserve: CGFloat = keyboardHeight > 0 ? expandedAccessoryBarHeight : collapsedAccessoryBarHeight
+        let initialSize = CGSize(width: bounds.width, height: max(0, bounds.height - initialAccessoryBarReserve))
+        sublayer.frame = CGRect(origin: .zero, size: initialSize)
+        sublayer.contentsScale = window?.screen.scale ?? UIScreen.main.scale
+
         // Add to layer hierarchy
         self.layer.addSublayer(sublayer)
 
@@ -1569,6 +1575,13 @@ class TerminalSurfaceView: UIView, ObservableObject, UIKeyInput, UITextInputTrai
             height: bounds.height - accessoryBarReserve
         )
         Logger.clauntty.verbose("layoutSubviews: effectiveSize=\(Int(effectiveSize.width))x\(Int(effectiveSize.height)), rotated=\(rotated)")
+
+        // Keep Ghostty's IOSurface layer frame in sync with view layout.
+        if let sublayer = ghosttySublayer {
+            sublayer.frame = CGRect(origin: .zero, size: effectiveSize)
+            sublayer.contentsScale = window?.screen.scale ?? UIScreen.main.scale
+        }
+
         sizeDidChange(effectiveSize)
 
         // Update selection handles after layout change

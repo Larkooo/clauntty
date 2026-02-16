@@ -18,41 +18,34 @@ struct ContentView: View {
       if sessionManager.hasSessions {
         // Show tabs + content when there are active sessions or web tabs
         // Tab bar overlays terminal content with transparent background
-        GeometryReader { geometry in
+        GeometryReader { _ in
           ZStack(alignment: .top) {
-            // Terminal tabs (full screen, with top padding for tab bar)
-            ForEach(sessionManager.sessions) { session in
-              let tab = SessionManager.ActiveTab.terminal(session.id)
-              let isActive = isTabCurrentlyActive(tab)
-
-              TerminalView(session: session, isTabSelectorPresented: showingFullTabSelector)
-                .safeAreaInset(edge: .top) {
-                  Color.clear.frame(height: 48)  // Tab bar height
-                }
-                .offset(x: isActive ? 0 : geometry.size.width)
-                .opacity(isActive ? 1 : 0)
-                .allowsHitTesting(isActive)
-                .transition(.identity)
-                .animation(nil, value: sessionManager.sessions.count)
-                .animation(nil, value: sessionManager.activeTab)
+            // Render only the active tab's content.
+            // Mounting many hidden terminal surfaces causes renderer contention.
+            Group {
+              if let activeSession = sessionManager.activeSession {
+                TerminalView(session: activeSession, isTabSelectorPresented: showingFullTabSelector)
+                  .id(activeSession.id)
+              } else if let activeWebTab = sessionManager.activeWebTab {
+                WebTabView(webTab: activeWebTab)
+                  .id(activeWebTab.id)
+              } else if let firstSession = sessionManager.sessions.first {
+                TerminalView(session: firstSession, isTabSelectorPresented: showingFullTabSelector)
+                  .id(firstSession.id)
+              } else if let firstWebTab = sessionManager.webTabs.first {
+                WebTabView(webTab: firstWebTab)
+                  .id(firstWebTab.id)
+              } else {
+                Color.clear
+              }
             }
-
-            // Web tabs (full screen, with top padding for tab bar)
-            ForEach(sessionManager.webTabs) { webTab in
-              let tab = SessionManager.ActiveTab.web(webTab.id)
-              let isActive = isTabCurrentlyActive(tab)
-
-              WebTabView(webTab: webTab)
-                .safeAreaInset(edge: .top) {
-                  Color.clear.frame(height: 48)  // Tab bar height
-                }
-                .offset(x: isActive ? 0 : geometry.size.width)
-                .opacity(isActive ? 1 : 0)
-                .allowsHitTesting(isActive)
-                .transition(.identity)
-                .animation(nil, value: sessionManager.webTabs.count)
-                .animation(nil, value: sessionManager.activeTab)
+            .safeAreaInset(edge: .top) {
+              Color.clear.frame(height: 48)  // Tab bar height
             }
+            .transition(.identity)
+            .animation(nil, value: sessionManager.activeTab)
+            .animation(nil, value: sessionManager.sessions.count)
+            .animation(nil, value: sessionManager.webTabs.count)
 
             // Tab bar overlay at top
             VStack(spacing: 0) {
@@ -203,30 +196,6 @@ struct ContentView: View {
     } else {
       sessionManager.activeTab = nil
     }
-  }
-
-  private func isTabCurrentlyActive(_ tab: SessionManager.ActiveTab) -> Bool {
-    if let activeTab = sessionManager.activeTab {
-      switch activeTab {
-      case .terminal(let id):
-        if sessionManager.sessions.contains(where: { $0.id == id }) {
-          return activeTab == tab
-        }
-      case .web(let id):
-        if sessionManager.webTabs.contains(where: { $0.id == id }) {
-          return activeTab == tab
-        }
-      }
-    }
-
-    // Fallback when activeTab is nil or stale: treat first available tab as active.
-    if let firstSession = sessionManager.sessions.first {
-      return tab == .terminal(firstSession.id)
-    }
-    if let firstWebTab = sessionManager.webTabs.first {
-      return tab == .web(firstWebTab.id)
-    }
-    return false
   }
 
   /// Check for --connect <name> and --tabs launch arguments
