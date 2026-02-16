@@ -49,6 +49,27 @@ final class SessionTests: XCTestCase {
         XCTAssertEqual(session.title, "user@example.com")
     }
 
+    func testSSHKeyStorePrivateKeyContentRetrieval() throws {
+        let store = SSHKeyStore()
+        let keyLabel = "Unit Test Key \(UUID().uuidString)"
+        let privateKey = """
+        -----BEGIN PRIVATE KEY-----
+        unit-test-key-content
+        -----END PRIVATE KEY-----
+        """
+
+        let savedKey = try store.addKey(label: keyLabel, privateKeyData: Data(privateKey.utf8))
+        defer { try? store.deleteKey(savedKey) }
+
+        let loaded = try store.privateKeyContent(for: savedKey.id)
+        XCTAssertEqual(loaded, privateKey)
+    }
+
+    func testSSHKeyStorePrivateKeyContentMissingKeyThrows() {
+        let store = SSHKeyStore()
+        XCTAssertThrowsError(try store.privateKeyContent(for: UUID().uuidString))
+    }
+
     func testAgentClassifierProgressLine() {
         let classified = AgentActivityClassifier.classify("Processing files... 42%")
         XCTAssertEqual(classified?.level, .progress)

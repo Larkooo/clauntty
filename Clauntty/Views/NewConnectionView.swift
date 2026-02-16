@@ -16,6 +16,9 @@ struct NewConnectionView: View {
     @State private var savePassword: Bool = true
     @State private var selectedKeyId: String?
     @State private var showingKeyImportSheet = false
+    @State private var showingKeyContentSheet = false
+    @State private var keyContentPreview = ""
+    @State private var keyContentPreviewLabel = ""
 
     // Validation
     @State private var showingValidationError = false
@@ -93,6 +96,12 @@ struct NewConnectionView: View {
                     selectedKeyId = key.id
                 }
             }
+            .sheet(isPresented: $showingKeyContentSheet) {
+                SSHKeyContentSheet(
+                    keyLabel: keyContentPreviewLabel,
+                    keyContent: keyContentPreview
+                )
+            }
             .navigationTitle(isEditing ? "Edit Server" : "New Server")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -155,6 +164,12 @@ struct NewConnectionView: View {
                         .foregroundColor(.green)
                     Text(key.label)
                         .foregroundColor(.secondary)
+                }
+
+                Button {
+                    showPrivateKeyContent(for: key)
+                } label: {
+                    Label("View Private Key Content", systemImage: "doc.text.magnifyingglass")
                 }
             }
 
@@ -248,12 +263,63 @@ struct NewConnectionView: View {
         dismiss()
     }
 
+    private func showPrivateKeyContent(for key: SSHKey) {
+        do {
+            keyContentPreview = try sshKeyStore.privateKeyContent(for: key.id)
+            keyContentPreviewLabel = key.label
+            showingKeyContentSheet = true
+        } catch {
+            validationError = "Failed to load key content: \(error.localizedDescription)"
+            showingValidationError = true
+        }
+    }
+
     private func dismissTerminalInput() {
         UIApplication.shared.connectedScenes
             .compactMap { $0 as? UIWindowScene }
             .flatMap { $0.windows }
             .forEach { $0.endEditing(true) }
         NotificationCenter.default.post(name: .hideAllAccessoryBars, object: nil)
+    }
+}
+
+private struct SSHKeyContentSheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let keyLabel: String
+    let keyContent: String
+
+    var body: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Sensitive: this is your full private key.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+
+                TextEditor(text: .constant(keyContent))
+                    .font(.system(.caption, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .padding(8)
+                    .background(Color(.secondarySystemBackground))
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+            }
+            .padding()
+            .navigationTitle(keyLabel)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") {
+                        dismiss()
+                    }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Copy") {
+                        UIPasteboard.general.string = keyContent
+                    }
+                }
+            }
+        }
     }
 }
 
