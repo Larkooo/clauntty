@@ -29,4 +29,7 @@ struct PersistedTab: Codable, Identifiable {
 
     /// Font size for this tab (nil = use global default)
     var fontSize: Float?
+
+    /// Agent launch settings for agent-focused sessions
+    var agentProfile: AgentLaunchProfile?
 }

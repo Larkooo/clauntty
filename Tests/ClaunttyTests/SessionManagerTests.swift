@@ -75,6 +75,28 @@ final class SessionManagerTests: XCTestCase {
         XCTAssertEqual(sessionManager.activeSessionId, session2.id)
     }
 
+    func testCreateAgentSessionStoresProfile() {
+        let config = SavedConnection(
+            name: "Agent Host",
+            host: "agent.example.com",
+            port: 22,
+            username: "agent",
+            authMethod: .password
+        )
+        let profile = AgentLaunchProfile(
+            provider: .codexCLI,
+            launchCommand: "codex",
+            initialPrompt: "summarize repo",
+            workingDirectory: "~/project"
+        )
+
+        let session = sessionManager.createAgentSession(for: config, profile: profile)
+
+        XCTAssertEqual(session.agentProfile, profile)
+        XCTAssertTrue(session.isAgentSession)
+        XCTAssertTrue(sessionManager.hasAgentSessions)
+    }
+
     // MARK: - Session Switching
 
     func testSwitchToSession() {
