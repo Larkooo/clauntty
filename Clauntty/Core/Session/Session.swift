@@ -5,6 +5,156 @@ import os.log
 import RtachClient
 import UIKit
 
+enum AgentProvider: String, Codable, CaseIterable, Identifiable, Hashable {
+    case claudeCode
+    case codexCLI
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .claudeCode: return "Claude Code"
+        case .codexCLI: return "Codex CLI"
+        }
+    }
+
+    var defaultLaunchCommand: String {
+        switch self {
+        case .claudeCode: return "claude"
+        case .codexCLI: return "codex"
+        }
+    }
+}
+
+struct AgentLaunchProfile: Codable, Hashable {
+    var provider: AgentProvider
+    var launchCommand: String
+    var initialPrompt: String? = nil
+    var workingDirectory: String? = nil
+    var repositoryURL: String? = nil
+    var useDedicatedWorktree: Bool? = nil
+
+    var trimmedLaunchCommand: String {
+        launchCommand.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    var trimmedInitialPrompt: String? {
+        let prompt = initialPrompt?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return prompt.isEmpty ? nil : prompt
+    }
+
+    var trimmedWorkingDirectory: String? {
+        let directory = workingDirectory?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return directory.isEmpty ? nil : directory
+    }
+
+    var trimmedRepositoryURL: String? {
+        let url = repositoryURL?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return url.isEmpty ? nil : url
+    }
+
+    var wantsDedicatedWorktree: Bool {
+        useDedicatedWorktree ?? false
+    }
+}
+
+enum AgentActivityLevel: String, Hashable {
+    case info
+    case progress
+    case waiting
+    case success
+    case error
+}
+
+struct AgentActivityEvent: Identifiable, Hashable {
+    let id = UUID()
+    let timestamp: Date
+    let level: AgentActivityLevel
+    let message: String
+}
+
+enum AgentActivityStatus: String, Hashable {
+    case idle
+    case starting
+    case running
+    case waitingForInput
+    case completed
+    case failed
+}
+
+struct AgentWorkspaceBootstrapPlan: Hashable {
+    var preLaunchCommands: [String]
+    var launchWorkingDirectory: String?
+    var repositoryInfoMessage: String?
+    var warningMessage: String?
+}
+
+enum AgentActivityClassifier {
+    private static let ansiRegex = try? NSRegularExpression(pattern: #"\u{001B}\[[0-9;?]*[ -/]*[@-~]"#)
+    private static let oscBellRegex = try? NSRegularExpression(pattern: #"\u{001B}\][^\u{0007}]*\u{0007}"#)
+    private static let oscStRegex = try? NSRegularExpression(pattern: #"\u{001B}\][^\u{001B}]*\u{001B}\\"#)
+    private static let percentRegex = try? NSRegularExpression(pattern: #"\b(\d{1,3})%\b"#)
+
+    static func classify(_ rawLine: String) -> (level: AgentActivityLevel, message: String)? {
+        let cleaned = sanitize(rawLine)
+        guard !cleaned.isEmpty, !isShellPrompt(cleaned) else { return nil }
+
+        let lowercase = cleaned.lowercased()
+        if hasPercent(cleaned) {
+            return (.progress, cleaned)
+        }
+        if containsAny(lowercase, ["error", "failed", "exception", "traceback"]) {
+            return (.error, cleaned)
+        }
+        if containsAny(lowercase, ["waiting for input", "press enter", "approve", "continue?", "y/n", "yes/no"]) {
+            return (.waiting, cleaned)
+        }
+        if containsAny(lowercase, ["done", "completed", "finished", "success", "applied patch"]) {
+            return (.success, cleaned)
+        }
+        if containsAny(lowercase, ["thinking", "analyzing", "planning", "reading", "writing", "running", "executing", "tool", "command"]) {
+            return (.info, cleaned)
+        }
+
+        return (.info, cleaned)
+    }
+
+    private static func sanitize(_ raw: String) -> String {
+        var result = raw
+        let fullRange = NSRange(result.startIndex..., in: result)
+        if let oscBellRegex {
+            result = oscBellRegex.stringByReplacingMatches(in: result, options: [], range: fullRange, withTemplate: "")
+        }
+        let rangeAfterOsc = NSRange(result.startIndex..., in: result)
+        if let oscStRegex {
+            result = oscStRegex.stringByReplacingMatches(in: result, options: [], range: rangeAfterOsc, withTemplate: "")
+        }
+        let rangeAfterOscSt = NSRange(result.startIndex..., in: result)
+        if let ansiRegex {
+            result = ansiRegex.stringByReplacingMatches(in: result, options: [], range: rangeAfterOscSt, withTemplate: "")
+        }
+        return result.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func hasPercent(_ line: String) -> Bool {
+        guard let percentRegex else { return false }
+        let range = NSRange(line.startIndex..., in: line)
+        return percentRegex.firstMatch(in: line, options: [], range: range) != nil
+    }
+
+    private static func containsAny(_ line: String, _ keywords: [String]) -> Bool {
+        keywords.contains { line.contains($0) }
+    }
+
+    private static func isShellPrompt(_ line: String) -> Bool {
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return true }
+        if trimmed.hasSuffix("$") || trimmed.hasSuffix("#") { return true }
+        if trimmed.hasPrefix("$ ") || trimmed.hasPrefix("# ") { return true }
+        return false
+    }
+}
+
 /// Represents a single terminal session (one tab)
 /// Each session has its own SSH channel and terminal surface
 @MainActor
@@ -86,11 +236,55 @@ class Session: ObservableObject, Identifiable {
 
             // Check for pending notification when title is set
             checkPendingNotification()
+            onStateChange?()
         }
     }
 
     /// Whether this session has ever been identified as Claude (persisted)
     private var _isClaudeSession: Bool = false
+
+    /// Agent launch settings for this session (nil = regular shell session)
+    var agentProfile: AgentLaunchProfile?
+
+    /// Real-time activity timeline for agent sessions
+    @Published private(set) var agentActivityEvents: [AgentActivityEvent] = []
+
+    /// Current activity status for the agent session
+    @Published private(set) var agentActivityStatus: AgentActivityStatus = .idle
+
+    /// Timestamp of last parsed agent activity event
+    @Published private(set) var lastAgentActivityAt: Date?
+
+    /// Whether this session is explicitly configured as an agent workflow session
+    var hasAgentProfile: Bool {
+        agentProfile != nil
+    }
+
+    /// Whether this should appear in agent-focused UI surfaces
+    var isAgentSession: Bool {
+        hasAgentProfile || isClaudeSession
+    }
+
+    /// Human-friendly provider label for agent sessions
+    var agentProviderDisplayName: String {
+        if let provider = agentProfile?.provider {
+            return provider.displayName
+        }
+        if isClaudeSession {
+            return AgentProvider.claudeCode.displayName
+        }
+        return "Agent"
+    }
+
+    /// Last known event text shown in activity feeds
+    var latestAgentActivityMessage: String? {
+        agentActivityEvents.last?.message
+    }
+
+    /// Recent activity events in reverse chronological order
+    func recentAgentActivity(limit: Int = 20) -> [AgentActivityEvent] {
+        Array(agentActivityEvents.suffix(limit).reversed())
+    }
 
     /// Display title for tab - prefer dynamic title if set
     var title: String {
@@ -264,6 +458,20 @@ class Session: ObservableObject, Identifiable {
     /// Maximum scrollback buffer size (50KB)
     private let maxScrollbackSize = 50 * 1024
 
+    // MARK: - Agent Activity
+
+    /// Buffer for line-based parsing of terminal output into activity events
+    private var agentLineBuffer = ""
+
+    /// Cap to keep activity timelines bounded in memory
+    private let maxAgentActivityEvents = 200
+
+    /// Whether agent bootstrap commands should be sent when framed mode is ready
+    private var pendingAgentBootstrap = false
+
+    /// Prevent duplicate launch injection on reconnects
+    private var didRunAgentBootstrap = false
+
     // MARK: - Callbacks
 
     /// Called when data is received from SSH (to display in terminal)
@@ -350,6 +558,11 @@ class Session: ObservableObject, Identifiable {
         rtachProtocol.connect()
 
         Logger.clauntty.debugOnly("Session \(self.id.uuidString.prefix(8)): channel attached, channelHandler is set")
+
+        // Plain SSH sessions never enter framed mode, so run bootstrap immediately.
+        if !expectsRtach {
+            runPendingAgentBootstrapIfNeeded()
+        }
     }
 
     /// Detach the channel (on disconnect)
@@ -371,6 +584,134 @@ class Session: ObservableObject, Identifiable {
         rtachProtocol.reset()
 
         Logger.clauntty.debugOnly("Session \(self.id.uuidString.prefix(8)): channel detached")
+    }
+
+    // MARK: - Agent Bootstrap
+
+    /// Queue automatic agent startup for brand-new sessions only.
+    func queueAgentBootstrapIfNeeded(isNewRemoteSession: Bool) {
+        guard isNewRemoteSession, agentProfile != nil, !didRunAgentBootstrap else { return }
+        pendingAgentBootstrap = true
+        agentActivityStatus = .starting
+        appendAgentActivity(level: .info, message: "Preparing \(agentProviderDisplayName) session")
+    }
+
+    private func runPendingAgentBootstrapIfNeeded() {
+        guard pendingAgentBootstrap, let profile = agentProfile else { return }
+        pendingAgentBootstrap = false
+        didRunAgentBootstrap = true
+
+        let workspacePlan = Self.makeAgentWorkspaceBootstrapPlan(profile: profile, sessionID: id)
+
+        if let info = workspacePlan.repositoryInfoMessage {
+            appendAgentActivity(level: .info, message: info)
+        }
+        if let warning = workspacePlan.warningMessage {
+            appendAgentActivity(level: .error, message: warning)
+        }
+
+        for command in workspacePlan.preLaunchCommands {
+            sendData(Data("\(command)\n".utf8))
+        }
+
+        if let workingDirectory = workspacePlan.launchWorkingDirectory {
+            sendData(Data("cd \(Self.shellQuote(workingDirectory))\n".utf8))
+            appendAgentActivity(level: .info, message: "Changed directory to \(workingDirectory)")
+        }
+
+        let launchCommand = profile.trimmedLaunchCommand
+        guard !launchCommand.isEmpty else { return }
+
+        sendData(Data("\(launchCommand)\n".utf8))
+        appendAgentActivity(level: .info, message: "Launched \(profile.provider.displayName)")
+        agentActivityStatus = .running
+
+        if let initialPrompt = profile.trimmedInitialPrompt {
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 900_000_000)
+                self.sendData(Data("\(initialPrompt)\n".utf8))
+                self.appendAgentActivity(level: .info, message: "Sent initial prompt")
+            }
+        }
+    }
+
+    private static func shellQuote(_ value: String) -> String {
+        let escaped = value.replacingOccurrences(of: "'", with: "'\"'\"'")
+        return "'\(escaped)'"
+    }
+
+    static func makeAgentWorkspaceBootstrapPlan(profile: AgentLaunchProfile, sessionID: UUID) -> AgentWorkspaceBootstrapPlan {
+        var preLaunchCommands: [String] = []
+        var launchWorkingDirectory = profile.trimmedWorkingDirectory
+        var repositoryInfoMessage: String?
+        var warningMessage: String?
+
+        if let repositoryURL = profile.trimmedRepositoryURL {
+            let repositorySlug = repositoryName(from: repositoryURL)
+            let repositoryRoot = "$HOME/.clauntty/repos/\(repositorySlug)"
+
+            preLaunchCommands.append("mkdir -p \"$HOME/.clauntty/repos\"")
+            preLaunchCommands.append("if [ ! -d \"\(repositoryRoot)/.git\" ]; then git clone \(shellQuote(repositoryURL)) \"\(repositoryRoot)\"; fi")
+            preLaunchCommands.append("if [ -d \"\(repositoryRoot)/.git\" ]; then git -C \"\(repositoryRoot)\" fetch --all --prune; fi")
+
+            if profile.wantsDedicatedWorktree {
+                let worktreeRoot = "$HOME/.clauntty/worktrees/\(repositorySlug)"
+                let worktreeName = "agent-\(sessionID.uuidString.lowercased())"
+                let worktreePath = "\(worktreeRoot)/\(worktreeName)"
+                preLaunchCommands.append("mkdir -p \"\(worktreeRoot)\"")
+                preLaunchCommands.append("git -C \"\(repositoryRoot)\" worktree add --detach \"\(worktreePath)\"")
+                if launchWorkingDirectory == nil {
+                    launchWorkingDirectory = worktreePath
+                }
+                repositoryInfoMessage = "Preparing \(repositorySlug) with dedicated worktree"
+            } else {
+                if launchWorkingDirectory == nil {
+                    launchWorkingDirectory = repositoryRoot
+                }
+                repositoryInfoMessage = "Preparing repository \(repositorySlug)"
+            }
+        } else if profile.wantsDedicatedWorktree {
+            warningMessage = "Worktree setup skipped (repository URL not provided)"
+        }
+
+        return AgentWorkspaceBootstrapPlan(
+            preLaunchCommands: preLaunchCommands,
+            launchWorkingDirectory: launchWorkingDirectory,
+            repositoryInfoMessage: repositoryInfoMessage,
+            warningMessage: warningMessage
+        )
+    }
+
+    private static func repositoryName(from repositoryURL: String) -> String {
+        let trimmed = repositoryURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        let withoutTrailingSlash = trimmed.hasSuffix("/") ? String(trimmed.dropLast()) : trimmed
+
+        var candidate: String
+        if let slash = withoutTrailingSlash.lastIndex(of: "/") {
+            candidate = String(withoutTrailingSlash[withoutTrailingSlash.index(after: slash)...])
+        } else if let colon = withoutTrailingSlash.lastIndex(of: ":") {
+            candidate = String(withoutTrailingSlash[withoutTrailingSlash.index(after: colon)...])
+        } else {
+            candidate = withoutTrailingSlash
+        }
+
+        if candidate.hasSuffix(".git") {
+            candidate.removeLast(4)
+        }
+
+        let lowered = candidate.lowercased()
+        let sanitized = lowered.map { character -> Character in
+            switch character {
+            case "a"..."z", "0"..."9", "-", "_", ".":
+                return character
+            default:
+                return "-"
+            }
+        }
+
+        let collapsed = String(sanitized).replacingOccurrences(of: "--+", with: "-", options: .regularExpression)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+        return collapsed.isEmpty ? "repo" : collapsed
     }
 
     // MARK: - Data Flow
@@ -482,6 +823,10 @@ class Session: ObservableObject, Identifiable {
         Logger.clauntty.verbose("DATA_FLOW[\(self.id.uuidString.prefix(8))] '\(sessionTitle)': \(data.count) bytes, callback=\(hasCallback)")
         totalBytesToTerminal += data.count
 
+        if isAgentSession {
+            processAgentActivityData(data)
+        }
+
         // Log if this data contains alternate screen switch escape sequence
         // ESC[?1049h = switch to alternate screen (bytes: 1b 5b 3f 31 30 34 39 68)
         // ESC[?1049l = switch to normal screen (bytes: 1b 5b 3f 31 30 34 39 6c)
@@ -519,6 +864,47 @@ class Session: ObservableObject, Identifiable {
             isPrefetchingOnIdle = false
             Logger.clauntty.debugOnly("Session \(self.id.uuidString.prefix(8)): pre-fetch complete, re-pausing")
             rtachProtocol.sendPause()
+        }
+    }
+
+    private func processAgentActivityData(_ data: Data) {
+        let text = String(decoding: data, as: UTF8.self)
+        guard !text.isEmpty else { return }
+
+        let normalized = text
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+        agentLineBuffer += normalized
+
+        while let newlineIndex = agentLineBuffer.firstIndex(of: "\n") {
+            let rawLine = String(agentLineBuffer[..<newlineIndex])
+            agentLineBuffer.removeSubrange(...newlineIndex)
+
+            if let classified = AgentActivityClassifier.classify(rawLine) {
+                appendAgentActivity(level: classified.level, message: classified.message)
+            }
+        }
+    }
+
+    private func appendAgentActivity(level: AgentActivityLevel, message: String) {
+        let event = AgentActivityEvent(timestamp: Date(), level: level, message: message)
+        agentActivityEvents.append(event)
+        if agentActivityEvents.count > maxAgentActivityEvents {
+            agentActivityEvents.removeFirst(agentActivityEvents.count - maxAgentActivityEvents)
+        }
+        lastAgentActivityAt = event.timestamp
+
+        switch level {
+        case .error:
+            agentActivityStatus = .failed
+        case .waiting:
+            agentActivityStatus = .waitingForInput
+        case .success:
+            agentActivityStatus = .completed
+        case .info, .progress:
+            if agentActivityStatus != .starting {
+                agentActivityStatus = .running
+            }
         }
     }
 
@@ -583,6 +969,9 @@ class Session: ObservableObject, Identifiable {
         // Inactivity-based detection: no output for 1.5s means likely waiting for input
         if !isWaitingForInput {
             isWaitingForInput = true
+            if isAgentSession {
+                appendAgentActivity(level: .waiting, message: "Waiting for input")
+            }
             Logger.clauntty.debugOnly("Session \(self.id.uuidString.prefix(8)): waiting for input")
             checkNotificationForWaitingInput()
         }
@@ -919,6 +1308,9 @@ extension Session: RtachClient.RtachSessionDelegate {
 
             // Mark as waiting for input
             self.isWaitingForInput = true
+            if self.isAgentSession {
+                self.appendAgentActivity(level: .waiting, message: "Waiting for input")
+            }
 
             // Check for notification (same logic as inactivity detection)
             self.checkNotificationForWaitingInput()
@@ -955,6 +1347,8 @@ extension Session: RtachClient.RtachSessionDelegate {
                 Logger.clauntty.debugOnly("Session \(self.id.uuidString.prefix(8)): claiming active on connect")
                 self.claimActive()
             }
+
+            self.runPendingAgentBootstrapIfNeeded()
         }
     }
 }

@@ -11,6 +11,7 @@ struct ContentView: View {
   @State private var portsSheetSession: Session?
   @State private var hasCheckedAutoConnect = false
   @State private var showingSpeechModelDownload = false
+  @State private var showingAgentActivitySheet = false
 
   var body: some View {
     NavigationStack {
@@ -82,6 +83,28 @@ struct ContentView: View {
               .frame(height: 48)
               Spacer()
             }
+
+            if sessionManager.hasAgentSessions {
+              VStack {
+                Spacer()
+                HStack {
+                  Spacer()
+                  Button {
+                    showingAgentActivitySheet = true
+                  } label: {
+                    Label("Activity", systemImage: "waveform.path.ecg")
+                      .font(.caption.weight(.semibold))
+                      .foregroundColor(.white)
+                      .padding(.horizontal, 12)
+                      .padding(.vertical, 10)
+                      .background(.black.opacity(0.7))
+                      .clipShape(Capsule())
+                  }
+                }
+                .padding(.trailing, 16)
+                .padding(.bottom, 20)
+              }
+            }
           }
         }
         .toolbar(.hidden, for: .navigationBar)
@@ -111,6 +134,10 @@ struct ContentView: View {
         }
         .sheet(item: $portsSheetSession) { session in
           PortsSheetView(session: session, onDismiss: { portsSheetSession = nil })
+            .environmentObject(sessionManager)
+        }
+        .sheet(isPresented: $showingAgentActivitySheet) {
+          AgentActivityView(onClose: { showingAgentActivitySheet = false })
             .environmentObject(sessionManager)
         }
         .onChange(of: sessionManager.sessions.count) { oldCount, newCount in
@@ -266,6 +293,138 @@ struct ContentView: View {
     }
   }
 
+}
+
+struct AgentActivityView: View {
+  @EnvironmentObject var sessionManager: SessionManager
+  @Environment(\.dismiss) private var dismiss
+
+  let onClose: () -> Void
+
+  var body: some View {
+    NavigationStack {
+      List {
+        if sessionManager.sortedAgentSessionsByActivity.isEmpty {
+          Text("No active agent sessions")
+            .foregroundColor(.secondary)
+        } else {
+          ForEach(sessionManager.sortedAgentSessionsByActivity) { session in
+            AgentActivitySessionCard(session: session) {
+              sessionManager.switchTo(session)
+              onClose()
+              dismiss()
+            }
+          }
+        }
+      }
+      .navigationTitle("Live Activity")
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        ToolbarItem(placement: .cancellationAction) {
+          Button("Done") {
+            onClose()
+            dismiss()
+          }
+        }
+      }
+    }
+  }
+}
+
+struct AgentActivitySessionCard: View {
+  @ObservedObject var session: Session
+
+  let onSelect: () -> Void
+
+  var body: some View {
+    Button(action: onSelect) {
+      VStack(alignment: .leading, spacing: 8) {
+        HStack {
+          Text(session.title)
+            .font(.headline)
+            .foregroundColor(.primary)
+            .lineLimit(1)
+
+          Spacer()
+
+          Text(session.agentProviderDisplayName)
+            .font(.caption2.weight(.semibold))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(Color.blue.opacity(0.15))
+            .foregroundColor(.blue)
+            .clipShape(Capsule())
+        }
+
+        HStack(spacing: 6) {
+          Circle()
+            .fill(statusColor)
+            .frame(width: 8, height: 8)
+          Text(statusText)
+            .font(.caption)
+            .foregroundColor(.secondary)
+          Spacer()
+          Text(session.connectionString)
+            .font(.caption2)
+            .foregroundColor(.secondary)
+            .lineLimit(1)
+        }
+
+        ForEach(session.recentAgentActivity(limit: 3)) { event in
+          HStack(alignment: .top, spacing: 8) {
+            Circle()
+              .fill(eventColor(event.level))
+              .frame(width: 6, height: 6)
+              .padding(.top, 5)
+
+            VStack(alignment: .leading, spacing: 2) {
+              Text(event.message)
+                .font(.caption)
+                .foregroundColor(.primary)
+                .lineLimit(2)
+              Text(event.timestamp, style: .time)
+                .font(.caption2)
+                .foregroundColor(.secondary)
+            }
+          }
+        }
+      }
+      .padding(.vertical, 6)
+    }
+    .buttonStyle(.plain)
+  }
+
+  private var statusText: String {
+    switch session.agentActivityStatus {
+    case .idle: return "Idle"
+    case .starting: return "Starting"
+    case .running: return "Running"
+    case .waitingForInput: return "Waiting for input"
+    case .completed: return "Completed"
+    case .failed: return "Failed"
+    }
+  }
+
+  private var statusColor: Color {
+    switch session.agentActivityStatus {
+    case .idle: return .gray
+    case .starting: return .orange
+    case .running: return .blue
+    case .waitingForInput: return .green
+    case .completed: return .mint
+    case .failed: return .red
+    }
+  }
+
+  private func eventColor(_ level: AgentActivityLevel) -> Color {
+    switch level {
+    case .info: return .blue
+    case .progress: return .cyan
+    case .waiting: return .green
+    case .success: return .mint
+    case .error: return .red
+    }
+  }
 }
 
 #Preview {

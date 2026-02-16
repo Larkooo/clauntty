@@ -106,6 +106,13 @@ class SessionManager: ObservableObject {
         return session
     }
 
+    /// Create a new agent-focused session with launch profile metadata.
+    func createAgentSession(for config: SavedConnection, profile: AgentLaunchProfile) -> Session {
+        let session = createSession(for: config)
+        session.agentProfile = profile
+        return session
+    }
+
     /// Whether to use rtach for session persistence
     /// Reads from UserDefaults, defaults to true
     var useRtach: Bool {
@@ -174,6 +181,7 @@ class SessionManager: ObservableObject {
 
         let config = session.connectionConfig
         let poolKey = connectionKey(for: config)
+        let isNewRemoteSession = rtachSessionId == nil && session.rtachSessionId == nil
 
         // Create a fresh SSH connection for the terminal session
         // (The connection from connectAndListSessions may be in a bad state after exec commands)
@@ -247,6 +255,7 @@ class SessionManager: ObservableObject {
         Logger.clauntty.debugOnly("SessionManager: channel created for \(session.id.uuidString.prefix(8))")
 
         session.attach(channel: channel, handler: handler, connection: connection, expectsRtach: usingRtach)
+        session.queueAgentBootstrapIfNeeded(isNewRemoteSession: isNewRemoteSession)
 
         // Wire up OSC 777 callbacks for port forwarding
         session.onPortForwardRequested = { [weak self, weak session] port in
@@ -529,6 +538,25 @@ class SessionManager: ObservableObject {
     /// Check if there are any active sessions or web tabs
     var hasSessions: Bool {
         !sessions.isEmpty || !webTabs.isEmpty
+    }
+
+    /// Agent-oriented sessions (explicit launch profile or detected Claude tab)
+    var agentSessions: [Session] {
+        sessions.filter { $0.isAgentSession }
+    }
+
+    /// Whether any agent workflows are currently active
+    var hasAgentSessions: Bool {
+        !agentSessions.isEmpty
+    }
+
+    /// Agent sessions sorted by most recent activity, fallback to creation time
+    var sortedAgentSessionsByActivity: [Session] {
+        agentSessions.sorted { lhs, rhs in
+            let lhsDate = lhs.lastAgentActivityAt ?? lhs.createdAt
+            let rhsDate = rhs.lastAgentActivityAt ?? rhs.createdAt
+            return lhsDate > rhsDate
+        }
     }
 
     /// Check if there are only terminal sessions (no web tabs)
@@ -1120,7 +1148,8 @@ class SessionManager: ObservableObject {
                 cachedTitle: session.title,
                 cachedDynamicTitle: session.dynamicTitle,
                 orderIndex: index,
-                fontSize: session.fontSize
+                fontSize: session.fontSize,
+                agentProfile: session.agentProfile
             )
             tabs.append(tab)
         }
@@ -1167,6 +1196,7 @@ class SessionManager: ObservableObject {
                 session.rtachSessionId = persisted.rtachSessionId
                 session.dynamicTitle = persisted.cachedDynamicTitle
                 session.fontSize = persisted.fontSize
+                session.agentProfile = persisted.agentProfile
                 // Note: state is already .disconnected by default
 
                 // Set up state change callback

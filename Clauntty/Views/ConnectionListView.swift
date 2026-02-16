@@ -10,6 +10,7 @@ struct ConnectionListView: View {
     @State private var connectionToEdit: SavedConnection?
     @State private var showingPasswordPrompt = false
     @State private var pendingConnection: SavedConnection?
+    @State private var pendingAgentProfile: AgentLaunchProfile?
     @State private var enteredPassword = ""
 
     // Connection state
@@ -17,6 +18,7 @@ struct ConnectionListView: View {
     @State private var connectionError: String?
     @State private var showingError = false
     @State private var showingSettings = false
+    @State private var showingAgentLauncher = false
 
     var body: some View {
         List {
@@ -57,6 +59,13 @@ struct ConnectionListView: View {
             }
             ToolbarItem(placement: .primaryAction) {
                 Button {
+                    showingAgentLauncher = true
+                } label: {
+                    Image(systemName: "sparkles")
+                }
+            }
+            ToolbarItem(placement: .primaryAction) {
+                Button {
                     showingNewConnection = true
                 } label: {
                     Image(systemName: "plus")
@@ -69,6 +78,13 @@ struct ConnectionListView: View {
         .sheet(item: $connectionToEdit) { connection in
             NewConnectionView(existingConnection: connection)
         }
+        .sheet(isPresented: $showingAgentLauncher) {
+            AgentSessionLauncherView { connection, profile in
+                showingAgentLauncher = false
+                connect(to: connection, agentProfile: profile)
+            }
+            .environmentObject(connectionStore)
+        }
         .sheet(isPresented: $showingSettings) {
             SettingsView()
         }
@@ -77,12 +93,14 @@ struct ConnectionListView: View {
             Button("Cancel", role: .cancel) {
                 enteredPassword = ""
                 pendingConnection = nil
+                pendingAgentProfile = nil
             }
             Button("Connect") {
                 if let connection = pendingConnection {
-                    performConnect(to: connection, password: enteredPassword)
+                    performConnect(to: connection, password: enteredPassword, agentProfile: pendingAgentProfile)
                 }
                 enteredPassword = ""
+                pendingAgentProfile = nil
             }
         } message: {
             if let connection = pendingConnection {
@@ -155,24 +173,25 @@ struct ConnectionListView: View {
         NotificationCenter.default.post(name: .hideAllAccessoryBars, object: nil)
     }
 
-    private func connect(to connection: SavedConnection) {
+    private func connect(to connection: SavedConnection, agentProfile: AgentLaunchProfile? = nil) {
         switch connection.authMethod {
         case .password:
             // Check if we have a saved password
             if let _ = try? KeychainHelper.getPassword(for: connection.id) {
-                performConnect(to: connection, password: nil)
+                performConnect(to: connection, password: nil, agentProfile: agentProfile)
             } else {
                 // Prompt for password
                 pendingConnection = connection
+                pendingAgentProfile = agentProfile
                 showingPasswordPrompt = true
             }
         case .sshKey:
             // SSH key auth - check if key exists and has passphrase
-            performConnect(to: connection, password: nil)
+            performConnect(to: connection, password: nil, agentProfile: agentProfile)
         }
     }
 
-    private func performConnect(to connection: SavedConnection, password: String?) {
+    private func performConnect(to connection: SavedConnection, password: String?, agentProfile: AgentLaunchProfile? = nil) {
         // Save password if provided
         if let password = password, !password.isEmpty {
             try? KeychainHelper.savePassword(for: connection.id, password: password)
@@ -195,8 +214,14 @@ struct ConnectionListView: View {
                     isConnecting = false
 
                     // Create a new session and tab
-                    let session = sessionManager.createSession(for: connection)
-                    Logger.clauntty.debugOnly("ConnectionListView: created new session \(session.id.uuidString.prefix(8))")
+                    let session: Session
+                    if let agentProfile {
+                        session = sessionManager.createAgentSession(for: connection, profile: agentProfile)
+                        Logger.clauntty.debugOnly("ConnectionListView: created agent session \(session.id.uuidString.prefix(8)) provider=\(agentProfile.provider.rawValue)")
+                    } else {
+                        session = sessionManager.createSession(for: connection)
+                        Logger.clauntty.debugOnly("ConnectionListView: created new session \(session.id.uuidString.prefix(8))")
+                    }
 
                     // Save persistence immediately
                     sessionManager.savePersistence()
@@ -235,6 +260,119 @@ struct ConnectionRow: View {
                 .font(.caption)
         }
         .padding(.vertical, 4)
+    }
+}
+
+struct AgentSessionLauncherView: View {
+    @EnvironmentObject var connectionStore: ConnectionStore
+    @Environment(\.dismiss) private var dismiss
+
+    let onLaunch: (SavedConnection, AgentLaunchProfile) -> Void
+
+    @State private var selectedConnectionId: UUID?
+    @State private var provider: AgentProvider = .claudeCode
+    @State private var launchCommand: String = AgentProvider.claudeCode.defaultLaunchCommand
+    @State private var workingDirectory: String = ""
+    @State private var repositoryURL: String = ""
+    @State private var useDedicatedWorktree = false
+    @State private var initialPrompt: String = ""
+
+    private var selectedConnection: SavedConnection? {
+        guard let selectedConnectionId else { return connectionStore.connections.first }
+        return connectionStore.connections.first { $0.id == selectedConnectionId }
+    }
+
+    private var canLaunch: Bool {
+        selectedConnection != nil && !launchCommand.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Server") {
+                    Picker("Connection", selection: $selectedConnectionId) {
+                        ForEach(connectionStore.connections) { connection in
+                            Text(connection.displayName).tag(Optional(connection.id))
+                        }
+                    }
+                }
+
+                Section("Agent") {
+                    Picker("Provider", selection: $provider) {
+                        ForEach(AgentProvider.allCases) { value in
+                            Text(value.displayName).tag(value)
+                        }
+                    }
+                    .onChange(of: provider) { _, newProvider in
+                        if launchCommand == AgentProvider.claudeCode.defaultLaunchCommand
+                            || launchCommand == AgentProvider.codexCLI.defaultLaunchCommand {
+                            launchCommand = newProvider.defaultLaunchCommand
+                        }
+                    }
+
+                    TextField("Launch command", text: $launchCommand)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+
+                    TextField("Working directory (optional)", text: $workingDirectory)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                }
+
+                Section("Repository (Optional)") {
+                    TextField("Repository URL", text: $repositoryURL)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .keyboardType(.URL)
+
+                    Toggle("Use dedicated worktree per agent", isOn: $useDedicatedWorktree)
+                        .disabled(repositoryURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+                    Text("If a repository URL is provided, Clauntty clones/fetches it before launch. Worktree mode creates an isolated worktree for each new agent session.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+
+                Section("Initial Prompt (Optional)") {
+                    TextEditor(text: $initialPrompt)
+                        .frame(minHeight: 120)
+                }
+            }
+            .navigationTitle("Launch Agent")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        dismiss()
+                    }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Launch") {
+                        guard let connection = selectedConnection else { return }
+                        let profile = AgentLaunchProfile(
+                            provider: provider,
+                            launchCommand: launchCommand,
+                            initialPrompt: initialPrompt,
+                            workingDirectory: workingDirectory,
+                            repositoryURL: repositoryURL,
+                            useDedicatedWorktree: useDedicatedWorktree
+                        )
+                        onLaunch(connection, profile)
+                    }
+                    .disabled(!canLaunch)
+                }
+            }
+            .onAppear {
+                if selectedConnectionId == nil {
+                    selectedConnectionId = connectionStore.connections.first?.id
+                }
+            }
+            .onChange(of: repositoryURL) { _, newValue in
+                if newValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    useDedicatedWorktree = false
+                }
+            }
+        }
     }
 }
 

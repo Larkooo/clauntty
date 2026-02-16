@@ -26,6 +26,8 @@ Most mobile terminals lose your session when the app backgrounds or your connect
 - Text selection with long-press
 - Port forwarding with in-app browser
 - SSH key authentication (Ed25519, ECDSA, RSA)
+- Agent launcher (Claude Code/Codex CLI) with live activity timeline
+- Optional repo bootstrap for agents (clone + dedicated per-agent worktree)
 
 **Open Source**
 - No accounts, no telemetry, no subscriptions

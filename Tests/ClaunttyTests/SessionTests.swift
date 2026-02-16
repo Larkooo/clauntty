@@ -49,6 +49,83 @@ final class SessionTests: XCTestCase {
         XCTAssertEqual(session.title, "user@example.com")
     }
 
+    func testAgentClassifierProgressLine() {
+        let classified = AgentActivityClassifier.classify("Processing files... 42%")
+        XCTAssertEqual(classified?.level, .progress)
+    }
+
+    func testAgentClassifierWaitingLine() {
+        let classified = AgentActivityClassifier.classify("Waiting for input from user")
+        XCTAssertEqual(classified?.level, .waiting)
+    }
+
+    func testAgentClassifierErrorLine() {
+        let classified = AgentActivityClassifier.classify("Error: command failed")
+        XCTAssertEqual(classified?.level, .error)
+    }
+
+    func testAgentClassifierFiltersPromptNoise() {
+        let classified = AgentActivityClassifier.classify("user@host:~$ ")
+        XCTAssertNil(classified)
+    }
+
+    func testAgentWorkspacePlanWithRepositoryClone() {
+        let profile = AgentLaunchProfile(
+            provider: .codexCLI,
+            launchCommand: "codex",
+            repositoryURL: "https://github.com/example-org/example-repo.git",
+            useDedicatedWorktree: false
+        )
+
+        let plan = Session.makeAgentWorkspaceBootstrapPlan(
+            profile: profile,
+            sessionID: UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!
+        )
+
+        XCTAssertNotNil(plan.repositoryInfoMessage)
+        XCTAssertTrue(plan.preLaunchCommands.contains(where: { $0.contains("git clone") }))
+        XCTAssertEqual(plan.launchWorkingDirectory, "$HOME/.clauntty/repos/example-repo")
+        XCTAssertNil(plan.warningMessage)
+    }
+
+    func testAgentWorkspacePlanWithDedicatedWorktree() {
+        let profile = AgentLaunchProfile(
+            provider: .claudeCode,
+            launchCommand: "claude",
+            repositoryURL: "git@github.com:example-org/agent-repo.git",
+            useDedicatedWorktree: true
+        )
+
+        let plan = Session.makeAgentWorkspaceBootstrapPlan(
+            profile: profile,
+            sessionID: UUID(uuidString: "11111111-2222-3333-4444-555555555555")!
+        )
+
+        XCTAssertNotNil(plan.repositoryInfoMessage)
+        XCTAssertTrue(plan.preLaunchCommands.contains(where: { $0.contains("worktree add --detach") }))
+        XCTAssertEqual(
+            plan.launchWorkingDirectory,
+            "$HOME/.clauntty/worktrees/agent-repo/agent-11111111-2222-3333-4444-555555555555"
+        )
+        XCTAssertNil(plan.warningMessage)
+    }
+
+    func testAgentWorkspacePlanWarnsWhenWorktreeWithoutRepository() {
+        let profile = AgentLaunchProfile(
+            provider: .claudeCode,
+            launchCommand: "claude",
+            useDedicatedWorktree: true
+        )
+
+        let plan = Session.makeAgentWorkspaceBootstrapPlan(
+            profile: profile,
+            sessionID: UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!
+        )
+
+        XCTAssertTrue(plan.preLaunchCommands.isEmpty)
+        XCTAssertEqual(plan.warningMessage, "Worktree setup skipped (repository URL not provided)")
+    }
+
     // MARK: - Data Handling
 
     func testHandleDataReceived() {
