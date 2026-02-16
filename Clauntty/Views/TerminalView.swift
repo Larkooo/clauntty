@@ -32,8 +32,23 @@ struct TerminalView: View {
 
     /// Whether this terminal is currently the active tab
     private var isActive: Bool {
-        sessionManager.activeTab == .terminal(session.id)
-            && !isTabSelectorPresented
+        if isTabSelectorPresented { return false }
+
+        if let activeTab = sessionManager.activeTab {
+            switch activeTab {
+            case .terminal(let id):
+                if sessionManager.sessions.contains(where: { $0.id == id }) {
+                    return id == session.id
+                }
+            case .web(let id):
+                if sessionManager.webTabs.contains(where: { $0.id == id }) {
+                    return false
+                }
+            }
+        }
+
+        // Fallback when activeTab is nil/stale: first available terminal is active.
+        return sessionManager.sessions.first?.id == session.id
     }
 
     var body: some View {
