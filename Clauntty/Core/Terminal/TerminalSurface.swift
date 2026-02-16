@@ -1784,6 +1784,25 @@ class TerminalSurfaceView: UIView, ObservableObject, UIKeyInput, UITextInputTrai
             onActiveStateChanged?(active)
         }
 
+        // Fast path: ignore repeated same-state updates to avoid focus/accessory churn.
+        if !stateChanged {
+            if active {
+                accessoryBar.isHidden = false
+                accessoryBar.isUserInteractionEnabled = true
+                window?.bringSubviewToFront(accessoryBar)
+                if let surface = self.surface, !isAppBackgrounded {
+                    ghostty_surface_set_occlusion(surface, true)
+                }
+            } else {
+                if let surface = self.surface {
+                    ghostty_surface_set_occlusion(surface, false)
+                }
+                accessoryBar.isHidden = true
+                accessoryBar.isUserInteractionEnabled = false
+            }
+            return
+        }
+
         if active {
             // Becoming active - gain focus and show keyboard
             Logger.clauntty.debugOnly("Surface becoming active")
@@ -1809,31 +1828,25 @@ class TerminalSurfaceView: UIView, ObservableObject, UIKeyInput, UITextInputTrai
                 Logger.clauntty.debugOnly("TAB_SWITCH: skipped un-occlude (surface=\(self.surface != nil), appBg=\(self.isAppBackgrounded))")
             }
 
-            // Heavy redraw/window-change work only when tab actually changes to active.
-            if stateChanged {
-                let accessoryBarReserve: CGFloat = keyboardHeight > 0 ? expandedAccessoryBarHeight : collapsedAccessoryBarHeight
-                let effectiveSize = CGSize(
-                    width: bounds.width,
-                    height: bounds.height - accessoryBarReserve
-                )
-                sizeDidChange(effectiveSize)
+            let accessoryBarReserve: CGFloat = keyboardHeight > 0 ? expandedAccessoryBarHeight : collapsedAccessoryBarHeight
+            let effectiveSize = CGSize(
+                width: bounds.width,
+                height: bounds.height - accessoryBarReserve
+            )
+            sizeDidChange(effectiveSize)
 
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
-                    guard let self = self else { return }
-                    Logger.clauntty.debugOnly("TAB_SWITCH: about to forceRedraw (delayed)")
-                    self.forceRedraw()
-                    Logger.clauntty.debugOnly("TAB_SWITCH: forceRedraw completed")
-                }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+                guard let self = self else { return }
+                Logger.clauntty.debugOnly("TAB_SWITCH: about to forceRedraw (delayed)")
+                self.forceRedraw()
+                Logger.clauntty.debugOnly("TAB_SWITCH: forceRedraw completed")
+            }
 
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
-                    guard let self = self else { return }
-                    Logger.clauntty.debugOnly("TAB_SWITCH: onTerminalSizeChanged callback is \(self.onTerminalSizeChanged == nil ? "nil" : "set")")
-                    self.onTerminalSizeChanged?(self.terminalSize.rows, self.terminalSize.columns)
-                    Logger.clauntty.debugOnly("TAB_SWITCH: SIGWINCH sent \(self.terminalSize.columns)x\(self.terminalSize.rows)")
-                }
-            } else if let surface = self.surface, !isAppBackgrounded {
-                // Keep already-active surfaces refreshed without disruptive relayout churn.
-                ghostty_surface_refresh(surface)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+                guard let self = self else { return }
+                Logger.clauntty.debugOnly("TAB_SWITCH: onTerminalSizeChanged callback is \(self.onTerminalSizeChanged == nil ? "nil" : "set")")
+                self.onTerminalSizeChanged?(self.terminalSize.rows, self.terminalSize.columns)
+                Logger.clauntty.debugOnly("TAB_SWITCH: SIGWINCH sent \(self.terminalSize.columns)x\(self.terminalSize.rows)")
             }
         } else {
             // Becoming inactive - lose focus to hide cursor and accessory bar

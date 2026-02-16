@@ -1,10 +1,10 @@
 import SwiftUI
 import os.log
 
-/// Wrapper class to hold terminal surface reference (works with SwiftUI @StateObject)
+/// Wrapper class to hold terminal surface reference across SwiftUI view updates
 @MainActor
-class TerminalSurfaceHolder: ObservableObject {
-    @Published var surface: TerminalSurfaceView?
+final class TerminalSurfaceHolder {
+    var surface: TerminalSurfaceView?
 }
 
 struct TerminalView: View {
@@ -18,8 +18,11 @@ struct TerminalView: View {
     /// Whether the full tab selector is currently presented
     var isTabSelectorPresented: Bool
 
-    /// Reference to the terminal surface view for SSH data flow (wrapped in class for SwiftUI)
-    @StateObject private var surfaceHolder = TerminalSurfaceHolder()
+    /// Reference to the terminal surface view for SSH data flow
+    @State private var surfaceHolder = TerminalSurfaceHolder()
+
+    /// Prevent duplicate concurrent connect attempts from overlapping lifecycle callbacks
+    @State private var isConnectTaskRunning = false
 
     /// Background color from current theme
     private var terminalBackgroundColor: Color {
@@ -109,8 +112,12 @@ struct TerminalView: View {
                     },
                     onSurfaceReady: { surface in
                         Logger.clauntty.debugOnly("onSurfaceReady called for session \(session.id.uuidString.prefix(8)), state=\(String(describing: session.state))")
-                        surfaceHolder.surface = surface
-                        connectSession(surface: surface)
+                        // Schedule after current SwiftUI update cycle to avoid
+                        // "Publishing changes from within view updates" warnings.
+                        DispatchQueue.main.async {
+                            surfaceHolder.surface = surface
+                            connectSession(surface: surface)
+                        }
                     }
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -300,6 +307,10 @@ struct TerminalView: View {
             Logger.clauntty.debugOnly("connectSession: session not disconnected (state=\(String(describing: session.state))), returning")
             return
         }
+        guard !isConnectTaskRunning else {
+            Logger.clauntty.debugOnly("connectSession: connect task already running for session \(session.id.uuidString.prefix(8)), skipping")
+            return
+        }
 
         // Set initial terminal size from actual surface dimensions before connecting
         // This ensures PTY is created with correct size from the start
@@ -308,7 +319,9 @@ struct TerminalView: View {
         Logger.clauntty.debugOnly("Setting initial terminal size: \(size.columns)x\(size.rows)")
 
         // Start connection via SessionManager
-        Task {
+        isConnectTaskRunning = true
+        Task { @MainActor in
+            defer { isConnectTaskRunning = false }
             do {
                 try await sessionManager.connect(session: session, rtachSessionId: session.rtachSessionId)
                 Logger.clauntty.debugOnly("Session connected: \(session.id.uuidString.prefix(8))")

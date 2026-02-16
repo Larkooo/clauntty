@@ -81,6 +81,9 @@ class SessionManager: ObservableObject {
     /// Minimum time between reconnect attempts (prevents rapid crash loops)
     private let reconnectBackoff: TimeInterval = 2.0
 
+    /// Session IDs currently in an active connect flow (prevents duplicate connects)
+    private var connectingSessionIDs: Set<UUID> = []
+
     // MARK: - Session Management
 
     /// Create a new session for a connection config
@@ -176,6 +179,13 @@ class SessionManager: ObservableObject {
     /// Connect a session with optional rtach session ID
     /// - Parameter rtachSessionId: The rtach session to attach to, or nil for new session
     func connect(session: Session, rtachSessionId: String? = nil) async throws {
+        guard !connectingSessionIDs.contains(session.id) else {
+            Logger.clauntty.debugOnly("SessionManager.connect skipped for \(session.id.uuidString.prefix(8)) (already connecting)")
+            return
+        }
+        connectingSessionIDs.insert(session.id)
+        defer { connectingSessionIDs.remove(session.id) }
+
         Logger.clauntty.debugOnly("SessionManager.connect called for session \(session.id.uuidString.prefix(8))")
         session.state = .connecting
 
