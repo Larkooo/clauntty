@@ -190,7 +190,16 @@ class TerminalSurfaceView: UIView, ObservableObject, UIKeyInput, UITextInputTrai
 
     /// Callback when active state changes (for power management)
     /// Called with true when tab becomes active, false when inactive
-    var onActiveStateChanged: ((Bool) -> Void)?
+    var onActiveStateChanged: ((Bool) -> Void)? {
+        didSet {
+            // Re-emit current state on the next setActive call so newly wired
+            // sessions always receive an initial active/inactive signal.
+            lastReportedActiveState = nil
+        }
+    }
+
+    /// Last active state reported via onActiveStateChanged.
+    private var lastReportedActiveState: Bool?
 
     // MARK: - Font Size
 
@@ -1779,26 +1788,16 @@ class TerminalSurfaceView: UIView, ObservableObject, UIKeyInput, UITextInputTrai
         let stateChanged = active != isActiveTab
         isActiveTab = active
 
-        // Notify about active state change (for power management) - only if state changed
-        if stateChanged {
+        // Notify power/session management when needed, including initial wiring.
+        if lastReportedActiveState != active {
             onActiveStateChanged?(active)
+            lastReportedActiveState = active
         }
 
         // Fast path: ignore repeated same-state updates to avoid focus/accessory churn.
         if !stateChanged {
-            if active {
-                accessoryBar.isHidden = false
-                accessoryBar.isUserInteractionEnabled = true
-                window?.bringSubviewToFront(accessoryBar)
-                if let surface = self.surface, !isAppBackgrounded {
-                    ghostty_surface_set_occlusion(surface, true)
-                }
-            } else {
-                if let surface = self.surface {
-                    ghostty_surface_set_occlusion(surface, false)
-                }
-                accessoryBar.isHidden = true
-                accessoryBar.isUserInteractionEnabled = false
+            if let surface = self.surface {
+                ghostty_surface_set_occlusion(surface, active && !isAppBackgrounded)
             }
             return
         }
