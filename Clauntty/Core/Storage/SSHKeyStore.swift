@@ -58,6 +58,19 @@ class SSHKeyStore: ObservableObject {
         keys.first { $0.id == id }
     }
 
+    /// Retrieve the stored private key content for inspection/debugging UI.
+    func privateKeyContent(for keyId: String) throws -> String {
+        guard let keyInfo = try KeychainHelper.getSSHKey(id: keyId) else {
+            throw KeychainHelper.KeychainError.itemNotFound
+        }
+
+        guard let content = String(data: keyInfo.privateKey, encoding: .utf8) else {
+            throw KeychainHelper.KeychainError.invalidData
+        }
+
+        return content
+    }
+
     /// Check if a key with the given label already exists
     func keyExists(withLabel label: String) -> Bool {
         keys.contains { $0.label.lowercased() == label.lowercased() }
