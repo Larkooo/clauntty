@@ -2,6 +2,7 @@ import SwiftUI
 import UIKit
 import GhosttyKit
 import Combine
+import QuartzCore
 import os.log
 
 // MARK: - Font Size Preference
@@ -1504,8 +1505,11 @@ class TerminalSurfaceView: UIView, ObservableObject, UIKeyInput, UITextInputTrai
 
     // MARK: - Layer
 
-    // NOTE: We do NOT override layerClass to CAMetalLayer because Ghostty
-    // adds its own IOSurfaceLayer as a sublayer. Using default CALayer.
+    // Match Ghostty's reference UIKit integration: use a CAMetalLayer-backed view.
+    // Ghostty still attaches its IOSurfaceLayer as a sublayer.
+    override class var layerClass: AnyClass {
+        CAMetalLayer.self
+    }
 
     /// Called by GhosttyKit's Metal renderer to add its IOSurfaceLayer
     /// GhosttyKit calls this on the view, but it's a CALayer method,
@@ -1739,16 +1743,14 @@ class TerminalSurfaceView: UIView, ObservableObject, UIKeyInput, UITextInputTrai
         let gridBefore = ghostty_surface_size(surface)
         Logger.clauntty.debugOnly("forceRedraw: BEFORE grid=\(gridBefore.columns)x\(gridBefore.rows), effectiveSize=\(Int(self.bounds.width))x\(Int(effectiveHeight))")
 
-        // Hide and show the view to force Metal layer to get new drawable
-        self.isHidden = true
-        self.isHidden = false
-
-        // Also do size toggle
-        ghostty_surface_set_size(surface, w, h - 40)
+        // Use a tiny size nudge plus refresh; hide/show can blank the IOSurface layer.
+        let nudgedHeight: UInt32 = h > 1 ? h - 1 : h
+        ghostty_surface_set_size(surface, w, nudgedHeight)
         ghostty_surface_set_size(surface, w, h)
         ghostty_surface_refresh(surface)
+        self.layer.setNeedsDisplay()
 
-        Logger.clauntty.debugOnly("TAB_SWITCH[\(self.sessionId)]: hide/show + size toggle completed")
+        Logger.clauntty.debugOnly("TAB_SWITCH[\(self.sessionId)]: size nudge + refresh completed")
 
         // Log state after redraw
         let gridAfter = ghostty_surface_size(surface)
@@ -1783,8 +1785,6 @@ class TerminalSurfaceView: UIView, ObservableObject, UIKeyInput, UITextInputTrai
         }
 
         if active {
-            // Always refresh rendering when becoming visible, even if already "active"
-            // This fixes frozen rendering when state gets out of sync
             // Becoming active - gain focus and show keyboard
             Logger.clauntty.debugOnly("Surface becoming active")
 
@@ -1801,42 +1801,39 @@ class TerminalSurfaceView: UIView, ObservableObject, UIKeyInput, UITextInputTrai
             }
             focusDidChange(true)
 
-            // Resume rendering for this tab FIRST (before redraw attempts)
-            // Must un-occlude before forceRedraw() or the render won't happen
             if let surface = self.surface, !isAppBackgrounded {
                 ghostty_surface_set_occlusion(surface, true)
-                // Toggle focus to wake up the renderer
-                ghostty_surface_set_focus(surface, false)
                 ghostty_surface_set_focus(surface, true)
                 Logger.clauntty.debugOnly("TAB_SWITCH[\(self.sessionId)]: un-occluded + focus toggled")
             } else {
                 Logger.clauntty.debugOnly("TAB_SWITCH: skipped un-occlude (surface=\(self.surface != nil), appBg=\(self.isAppBackgrounded))")
             }
 
-            // Force size update to ensure Metal layer frame is correct after tab switch
-            // Always reserve space - different amounts for expanded vs collapsed bar
-            let accessoryBarReserve: CGFloat = keyboardHeight > 0 ? expandedAccessoryBarHeight : collapsedAccessoryBarHeight
-            let effectiveSize = CGSize(
-                width: bounds.width,
-                height: bounds.height - accessoryBarReserve
-            )
-            sizeDidChange(effectiveSize)
+            // Heavy redraw/window-change work only when tab actually changes to active.
+            if stateChanged {
+                let accessoryBarReserve: CGFloat = keyboardHeight > 0 ? expandedAccessoryBarHeight : collapsedAccessoryBarHeight
+                let effectiveSize = CGSize(
+                    width: bounds.width,
+                    height: bounds.height - accessoryBarReserve
+                )
+                sizeDidChange(effectiveSize)
 
-            // Delay forceRedraw to let the un-occlude message propagate to renderer thread
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
-                guard let self = self else { return }
-                Logger.clauntty.debugOnly("TAB_SWITCH: about to forceRedraw (delayed)")
-                self.forceRedraw()
-                Logger.clauntty.debugOnly("TAB_SWITCH: forceRedraw completed")
-            }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+                    guard let self = self else { return }
+                    Logger.clauntty.debugOnly("TAB_SWITCH: about to forceRedraw (delayed)")
+                    self.forceRedraw()
+                    Logger.clauntty.debugOnly("TAB_SWITCH: forceRedraw completed")
+                }
 
-            // Force the remote shell to redraw by sending a SIGWINCH
-            // This triggers the shell/app (like Claude Code) to repaint
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
-                guard let self = self else { return }
-                Logger.clauntty.debugOnly("TAB_SWITCH: onTerminalSizeChanged callback is \(self.onTerminalSizeChanged == nil ? "nil" : "set")")
-                self.onTerminalSizeChanged?(self.terminalSize.rows, self.terminalSize.columns)
-                Logger.clauntty.debugOnly("TAB_SWITCH: SIGWINCH sent \(self.terminalSize.columns)x\(self.terminalSize.rows)")
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+                    guard let self = self else { return }
+                    Logger.clauntty.debugOnly("TAB_SWITCH: onTerminalSizeChanged callback is \(self.onTerminalSizeChanged == nil ? "nil" : "set")")
+                    self.onTerminalSizeChanged?(self.terminalSize.rows, self.terminalSize.columns)
+                    Logger.clauntty.debugOnly("TAB_SWITCH: SIGWINCH sent \(self.terminalSize.columns)x\(self.terminalSize.rows)")
+                }
+            } else if let surface = self.surface, !isAppBackgrounded {
+                // Keep already-active surfaces refreshed without disruptive relayout churn.
+                ghostty_surface_refresh(surface)
             }
         } else {
             // Becoming inactive - lose focus to hide cursor and accessory bar
