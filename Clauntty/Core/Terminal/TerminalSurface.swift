@@ -421,9 +421,6 @@ class TerminalSurfaceView: UIView, ObservableObject, UIKeyInput, UITextInputTrai
             guard let self = self else { return }
             Logger.clauntty.debugOnly("[TAB_SELECTOR] hideAllAccessoryBars received by \(self.sessionId), isFirstResponder=\(self.isFirstResponder), isActiveTab=\(self.isActiveTab)")
 
-            // Mark as inactive to prevent delayed becomeFirstResponder calls
-            self.isActiveTab = false
-
             self.accessoryBar.isHidden = true
             self.accessoryBar.isUserInteractionEnabled = false
             if self.isFirstResponder {
