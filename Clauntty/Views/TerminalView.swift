@@ -201,6 +201,11 @@ struct TerminalView: View {
             guard isActive, let surface = surfaceHolder.surface else { return }
             handleCaptureTerminalText(surface: surface)
         }
+        .onAppear {
+            if let surface = surfaceHolder.surface, session.state == .disconnected {
+                connectSession(surface: surface)
+            }
+        }
         .onChange(of: sessionManager.activeTab) { oldTab, newTab in
             // Compute active state from the actual tab change
             // (Can't use .onChange on computed `isActive` - SwiftUI doesn't track it)
@@ -217,6 +222,11 @@ struct TerminalView: View {
             // Capture screenshot when switching away from this tab
             if wasActive && !nowActive, let surface = surfaceHolder.surface {
                 session.cachedScreenshot = surface.captureScreenshot()
+            }
+
+            // If this tab became active while disconnected, ensure connection starts.
+            if !wasActive && nowActive, session.state == .disconnected, let surface = surfaceHolder.surface {
+                connectSession(surface: surface)
             }
         }
     }
@@ -248,6 +258,8 @@ struct TerminalView: View {
     private func connectSession(surface: TerminalSurfaceView) {
         Logger.clauntty.debugOnly("connectSession called for session \(session.id.uuidString.prefix(8)), state=\(String(describing: session.state))")
 
+        let hadDataCallback = session.onDataReceived != nil
+
         // Always wire up the display - we need this for data flow regardless of connection state
         wireSessionToSurface(surface: surface)
 
@@ -255,6 +267,14 @@ struct TerminalView: View {
         // This handles the case where auto-connect ran before surface was ready
         if case .connected = session.state {
             Logger.clauntty.debugOnly("connectSession: session already connected, sending window change")
+
+            // If output arrived before the terminal surface wiring callback was installed,
+            // replay buffered output so the surface doesn't appear blank.
+            if !hadDataCallback && !session.scrollbackBuffer.isEmpty {
+                surface.writeSSHOutput(session.scrollbackBuffer)
+                surface.forceRedraw()
+            }
+
             let size = surface.terminalSize
             session.sendWindowChange(rows: size.rows, columns: size.columns)
             return
