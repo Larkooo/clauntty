@@ -23,7 +23,7 @@ struct ContentView: View {
             // Terminal tabs (full screen, with top padding for tab bar)
             ForEach(sessionManager.sessions) { session in
               let tab = SessionManager.ActiveTab.terminal(session.id)
-              let isActive = sessionManager.activeTab == tab
+              let isActive = isTabCurrentlyActive(tab)
 
               TerminalView(session: session, isTabSelectorPresented: showingFullTabSelector)
                 .safeAreaInset(edge: .top) {
@@ -40,7 +40,7 @@ struct ContentView: View {
             // Web tabs (full screen, with top padding for tab bar)
             ForEach(sessionManager.webTabs) { webTab in
               let tab = SessionManager.ActiveTab.web(webTab.id)
-              let isActive = sessionManager.activeTab == tab
+              let isActive = isTabCurrentlyActive(tab)
 
               WebTabView(webTab: webTab)
                 .safeAreaInset(edge: .top) {
@@ -203,6 +203,30 @@ struct ContentView: View {
     } else {
       sessionManager.activeTab = nil
     }
+  }
+
+  private func isTabCurrentlyActive(_ tab: SessionManager.ActiveTab) -> Bool {
+    if let activeTab = sessionManager.activeTab {
+      switch activeTab {
+      case .terminal(let id):
+        if sessionManager.sessions.contains(where: { $0.id == id }) {
+          return activeTab == tab
+        }
+      case .web(let id):
+        if sessionManager.webTabs.contains(where: { $0.id == id }) {
+          return activeTab == tab
+        }
+      }
+    }
+
+    // Fallback when activeTab is nil or stale: treat first available tab as active.
+    if let firstSession = sessionManager.sessions.first {
+      return tab == .terminal(firstSession.id)
+    }
+    if let firstWebTab = sessionManager.webTabs.first {
+      return tab == .web(firstWebTab.id)
+    }
+    return false
   }
 
   /// Check for --connect <name> and --tabs launch arguments
