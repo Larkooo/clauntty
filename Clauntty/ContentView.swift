@@ -158,7 +158,14 @@ struct ContentView: View {
       }
     }
     .onAppear {
+      ensureValidActiveTab()
       checkAutoConnect()
+    }
+    .onChange(of: sessionManager.sessions.count) { _, _ in
+      ensureValidActiveTab()
+    }
+    .onChange(of: sessionManager.webTabs.count) { _, _ in
+      ensureValidActiveTab()
     }
     .onReceive(NotificationCenter.default.publisher(for: .promptSpeechModelDownload)) { _ in
       showingSpeechModelDownload = true
@@ -172,6 +179,29 @@ struct ContentView: View {
       Button("Cancel", role: .cancel) {}
     } message: {
       Text("This will download approximately 800 MB of data for on-device speech recognition. The model runs entirely on your device for privacy.")
+    }
+  }
+
+  private func ensureValidActiveTab() {
+    if let activeTab = sessionManager.activeTab {
+      switch activeTab {
+      case .terminal(let id):
+        if sessionManager.sessions.contains(where: { $0.id == id }) {
+          return
+        }
+      case .web(let id):
+        if sessionManager.webTabs.contains(where: { $0.id == id }) {
+          return
+        }
+      }
+    }
+
+    if let session = sessionManager.sessions.first {
+      sessionManager.activeTab = .terminal(session.id)
+    } else if let webTab = sessionManager.webTabs.first {
+      sessionManager.activeTab = .web(webTab.id)
+    } else {
+      sessionManager.activeTab = nil
     }
   }
 
