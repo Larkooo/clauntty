@@ -54,6 +54,14 @@ struct TerminalView: View {
         return sessionManager.sessions.first?.id == session.id
     }
 
+    /// Whether this session is the selected terminal tab (ignores tab selector overlay visibility).
+    private var isSelectedTerminalTab: Bool {
+        if case .terminal(let id) = sessionManager.activeTab {
+            return id == session.id
+        }
+        return sessionManager.sessions.first?.id == session.id
+    }
+
     var body: some View {
         ZStack {
             // Show terminal surface based on GhosttyApp readiness
@@ -284,6 +292,13 @@ struct TerminalView: View {
 
         // Always wire up the display - we need this for data flow regardless of connection state
         wireSessionToSurface(surface: surface)
+
+        // Only the selected terminal tab is allowed to drive a connect attempt.
+        // This prevents hidden/restored tabs from creating concurrent SSH/rtach flows.
+        guard isSelectedTerminalTab else {
+            Logger.clauntty.debugOnly("connectSession: skipping for non-selected tab \(session.id.uuidString.prefix(8))")
+            return
+        }
 
         // If already connected, just send window change to fix terminal size
         // This handles the case where auto-connect ran before surface was ready
